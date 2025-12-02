@@ -123,7 +123,7 @@ func run(cfg *config.Config, headless bool) {
 		if welcome.IsFirstRun() {
 			go func() {
 				welcome.ShowWelcome()
-				welcome.MarkAsShown()
+				_ = welcome.MarkAsShown() // Ignore error - non-critical
 			}()
 		}
 

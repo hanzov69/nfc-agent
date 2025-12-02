@@ -1,3 +1,5 @@
+//go:build !linux
+
 package tray
 
 // iconData contains the menu bar icon as PNG bytes (22x22)
