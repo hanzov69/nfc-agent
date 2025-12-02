@@ -1,7 +1,7 @@
 # Build artifacts
 dist/
-nfc-agent
-nfc-agent.exe
+/nfc-agent
+/nfc-agent.exe
 
 # IDE
 .idea/
