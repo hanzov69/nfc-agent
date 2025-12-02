@@ -310,18 +310,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Update Homebrew tap
-  homebrew:
-    name: Update Homebrew
-    needs: release
-    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-')
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Update Homebrew formula
-        uses: dawidd6/action-homebrew-bump-formula@v3
-        with:
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          tap: SimplyPrint/homebrew-tap
-          formula: nfc-agent
-          tag: ${{ github.ref_name }}
+  # Update Homebrew tap (disabled until tap repo is created)
+  # To enable: create SimplyPrint/homebrew-tap repo and add HOMEBREW_TAP_TOKEN secret
+  # homebrew:
+  #   name: Update Homebrew
+  #   needs: release
+  #   if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-')
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Update Homebrew formula
+  #       uses: dawidd6/action-homebrew-bump-formula@v3
+  #       with:
+  #         token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+  #         tap: SimplyPrint/homebrew-tap
+  #         formula: nfc-agent
+  #         tag: ${{ github.ref_name }}
