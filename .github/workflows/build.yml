@@ -170,6 +170,7 @@ jobs:
           mkdir -p "dist/NFC Agent.app/Contents/Resources"
           cp dist/universal/nfc-agent "dist/NFC Agent.app/Contents/MacOS/"
           cp build/darwin/Info.plist "dist/NFC Agent.app/Contents/"
+          cp build/darwin/AppIcon.icns "dist/NFC Agent.app/Contents/Resources/"
           # Update version in Info.plist
           VERSION="${GITHUB_REF_NAME#v}"
           sed -i '' "s/1.0.0/${VERSION}/g" "dist/NFC Agent.app/Contents/Info.plist"
@@ -185,7 +186,21 @@ jobs:
       - name: Create DMG
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          hdiutil create -volname "NFC Agent" -srcfolder "dist/NFC Agent.app" -ov -format UDZO "dist/NFC-Agent-${VERSION}.dmg"
+          # Install create-dmg for nice "drag to Applications" UX
+          brew install create-dmg
+          # Create DMG with Applications symlink
+          create-dmg \
+            --volname "NFC Agent" \
+            --volicon "build/darwin/AppIcon.icns" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "NFC Agent.app" 150 185 \
+            --hide-extension "NFC Agent.app" \
+            --app-drop-link 450 185 \
+            "dist/NFC-Agent-${VERSION}.dmg" \
+            "dist/NFC Agent.app" \
+            || true  # create-dmg returns non-zero even on success sometimes
 
       - name: Notarize DMG
         if: env.APPLE_ID != ''
