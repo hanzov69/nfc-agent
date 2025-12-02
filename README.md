@@ -3,10 +3,9 @@
 A local HTTP/WebSocket server that enables web applications to communicate with NFC card readers.
 
 [![CI](https://github.com/SimplyPrint/nfc-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/SimplyPrint/nfc-agent/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/SimplyPrint/nfc-agent)](https://goreportcard.com/report/github.com/SimplyPrint/nfc-agent)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![GitHub release](https://img.shields.io/github/v/release/SimplyPrint/nfc-agent)](https://github.com/SimplyPrint/nfc-agent/releases)
-[![Go version](https://img.shields.io/github/go-mod/go-version/SimplyPrint/nfc-agent)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/SimplyPrint/nfc-agent/releases)
 
 ---
 
@@ -241,9 +240,9 @@ NFC Agent uses the PC/SC (Personal Computer/Smart Card) interface to communicate
 4. Response flows back through NFC Agent to the web app
 
 ```
-┌─────────────┐     HTTP/WS      ┌─────────────┐     PC/SC      ┌──────────┐     NFC      ┌──────┐
-│   Web App   │ ◄──────────────► │  NFC Agent  │ ◄────────────► │  Reader  │ ◄──────────► │ Card │
-└─────────────┘   localhost:32145 └─────────────┘                └──────────┘              └──────┘
+┌───────────┐      HTTP/WS       ┌───────────┐      PC/SC       ┌────────┐      NFC       ┌──────┐
+│  Web App  │◄─────────────────► │ NFC Agent │◄────────────────►│ Reader │◄──────────────►│ Card │
+└───────────┘    localhost:32145 └───────────┘                  └────────┘                └──────┘
 ```
 
 ## Security Considerations

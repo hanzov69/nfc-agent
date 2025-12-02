@@ -86,7 +86,12 @@ jobs:
       - name: Publish to NPM
         if: steps.version-check.outputs.changed == 'true'
         working-directory: ./sdk
-        run: npm publish --access public
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "NPM_TOKEN not configured - skipping publish"
+            exit 0
+          fi
+          npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
