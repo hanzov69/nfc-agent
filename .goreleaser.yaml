@@ -12,20 +12,11 @@ builds:
     binary: nfc-agent
     env:
       - CGO_ENABLED=1
+    # Only build Linux - macOS and Windows are built in separate CI jobs
     goos:
-      - darwin
-      - windows
       - linux
     goarch:
       - amd64
-      - arm64
-    ignore:
-      # Windows arm64 not commonly needed
-      - goos: windows
-        goarch: arm64
-      # Linux arm64 can be added later
-      - goos: linux
-        goarch: arm64
     ldflags:
       - -s -w
       - -X github.com/SimplyPrint/nfc-agent/internal/api.Version={{.Version}}
@@ -34,10 +25,8 @@ builds:
 
 archives:
   - id: default
-    format: tar.gz
-    format_overrides:
-      - goos: windows
-        format: zip
+    formats:
+      - tar.gz
     name_template: >-
       {{ .ProjectName }}_
       {{- .Version }}_
