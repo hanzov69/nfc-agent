@@ -39,6 +39,7 @@ archives:
 nfpms:
   - id: packages
     package_name: nfc-agent
+    file_name_template: "NFC-Agent-{{ .Version }}-linux-{{ .Arch }}"
     vendor: SimplyPrint
     homepage: https://github.com/SimplyPrint/nfc-agent
     maintainer: SimplyPrint <support@simplyprint.io>

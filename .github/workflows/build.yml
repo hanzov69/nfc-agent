@@ -198,7 +198,7 @@ jobs:
             --icon "NFC Agent.app" 150 185 \
             --hide-extension "NFC Agent.app" \
             --app-drop-link 450 185 \
-            "dist/NFC-Agent-${VERSION}.dmg" \
+            "dist/NFC-Agent-${VERSION}-macos.dmg" \
             "dist/NFC Agent.app" \
             || true  # create-dmg returns non-zero even on success sometimes
 
@@ -210,8 +210,8 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          xcrun notarytool submit "dist/NFC-Agent-${VERSION}.dmg" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
-          xcrun stapler staple "dist/NFC-Agent-${VERSION}.dmg"
+          xcrun notarytool submit "dist/NFC-Agent-${VERSION}-macos.dmg" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "dist/NFC-Agent-${VERSION}-macos.dmg"
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
@@ -312,7 +312,8 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release
-          find artifacts -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.deb" -o -name "*.rpm" -o -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} release/ \;
+          # Copy specific files (not raw binaries)
+          find artifacts -type f \( -name "*.dmg" -o -name "*-setup.exe" -o -name "*.deb" -o -name "*.rpm" \) -exec cp {} release/ \;
           ls -la release/
 
       - name: Create Release
