@@ -294,6 +294,12 @@ jobs:
           name: nfc-agent-linux-rpm
           path: dist/*.rpm
 
+      - name: Upload tar.gz archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: nfc-agent-linux-tarball
+          path: dist/*.tar.gz
+
   # Create release
   release:
     name: Create Release
@@ -314,7 +320,7 @@ jobs:
           mkdir -p release
           VERSION="${GITHUB_REF_NAME#v}"
           # Copy installer packages
-          find artifacts -type f \( -name "*.dmg" -o -name "*-setup.exe" -o -name "*.deb" -o -name "*.rpm" \) -exec cp {} release/ \;
+          find artifacts -type f \( -name "*.dmg" -o -name "*-setup.exe" -o -name "*.deb" -o -name "*.rpm" -o -name "*.tar.gz" \) -exec cp {} release/ \;
           # Also include standalone Windows exe with friendly name
           if [ -f "artifacts/nfc-agent-windows-x64/nfc-agent.exe" ]; then
             cp "artifacts/nfc-agent-windows-x64/nfc-agent.exe" "release/NFC-Agent-${VERSION}-windows.exe"

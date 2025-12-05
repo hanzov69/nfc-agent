@@ -82,6 +82,18 @@ sudo dnf install pcsc-lite
 sudo systemctl enable --now pcscd
 ```
 
+**Arch Linux / Other:**
+
+```bash
+# Download the tar.gz archive from GitHub Releases
+tar -xzf nfc-agent_*_linux_amd64.tar.gz
+sudo mv nfc-agent /usr/local/bin/
+
+# Install PC/SC daemon
+sudo pacman -S pcsclite  # Arch
+sudo systemctl enable --now pcscd
+```
+
 ## Quick Start
 
 1. **Connect** your NFC reader via USB
