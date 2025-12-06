@@ -7,11 +7,28 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"text/template"
 )
 
 const (
-	serviceName     = "nfc-agent"
+	appName = "nfc-agent"
+
+	// XDG Autostart desktop entry - runs as part of graphical session
+	// This ensures proper polkit authorization (recognized as "active" session)
+	desktopTemplate = `[Desktop Entry]
+Type=Application
+Name=NFC Agent
+Comment=Local NFC card reader service for web applications
+Exec={{.ExecutablePath}}
+Icon=nfc-agent
+Terminal=false
+Categories=Utility;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+`
+
+	// Legacy systemd user service (kept for headless/server environments)
 	serviceTemplate = `[Unit]
 Description=NFC Agent - Local NFC card reader service
 After=graphical-session.target
@@ -35,9 +52,19 @@ func New() Service {
 	return &linuxService{}
 }
 
-func (s *linuxService) servicePath() string {
+func (s *linuxService) autostartPath() string {
+	// XDG autostart directory
+	configDir := os.Getenv("XDG_CONFIG_HOME")
+	if configDir == "" {
+		home, _ := os.UserHomeDir()
+		configDir = filepath.Join(home, ".config")
+	}
+	return filepath.Join(configDir, "autostart", appName+".desktop")
+}
+
+func (s *linuxService) systemdServicePath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "systemd", "user", serviceName+".service")
+	return filepath.Join(home, ".config", "systemd", "user", appName+".service")
 }
 
 func (s *linuxService) Install() error {
@@ -57,16 +84,25 @@ func (s *linuxService) Install() error {
 		return fmt.Errorf("failed to resolve executable path: %w", err)
 	}
 
-	// Ensure systemd user directory exists
-	serviceDir := filepath.Dir(s.servicePath())
-	if err := os.MkdirAll(serviceDir, 0755); err != nil {
-		return fmt.Errorf("failed to create systemd user directory: %w", err)
+	// Use XDG autostart for graphical sessions (works with polkit)
+	if err := s.installAutostart(execPath); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *linuxService) installAutostart(execPath string) error {
+	// Ensure autostart directory exists
+	autostartDir := filepath.Dir(s.autostartPath())
+	if err := os.MkdirAll(autostartDir, 0755); err != nil {
+		return fmt.Errorf("failed to create autostart directory: %w", err)
 	}
 
 	// Parse and execute template
-	tmpl, err := template.New("service").Parse(serviceTemplate)
+	tmpl, err := template.New("desktop").Parse(desktopTemplate)
 	if err != nil {
-		return fmt.Errorf("failed to parse service template: %w", err)
+		return fmt.Errorf("failed to parse desktop template: %w", err)
 	}
 
 	data := struct {
@@ -75,30 +111,15 @@ func (s *linuxService) Install() error {
 		ExecutablePath: execPath,
 	}
 
-	// Write service file
-	f, err := os.Create(s.servicePath())
+	// Write desktop file
+	f, err := os.Create(s.autostartPath())
 	if err != nil {
-		return fmt.Errorf("failed to create service file: %w", err)
+		return fmt.Errorf("failed to create autostart file: %w", err)
 	}
 	defer f.Close()
 
 	if err := tmpl.Execute(f, data); err != nil {
-		return fmt.Errorf("failed to write service file: %w", err)
-	}
-
-	// Reload systemd daemon
-	if err := s.runSystemctl("daemon-reload"); err != nil {
-		return fmt.Errorf("failed to reload systemd: %w", err)
-	}
-
-	// Enable the service
-	if err := s.runSystemctl("enable", serviceName+".service"); err != nil {
-		return fmt.Errorf("failed to enable service: %w", err)
-	}
-
-	// Start the service
-	if err := s.runSystemctl("start", serviceName+".service"); err != nil {
-		return fmt.Errorf("failed to start service: %w", err)
+		return fmt.Errorf("failed to write autostart file: %w", err)
 	}
 
 	return nil
@@ -109,51 +130,71 @@ func (s *linuxService) Uninstall() error {
 		return ErrNotInstalled
 	}
 
-	// Stop the service
-	s.runSystemctl("stop", serviceName+".service")
-
-	// Disable the service
-	s.runSystemctl("disable", serviceName+".service")
-
-	// Remove service file
-	if err := os.Remove(s.servicePath()); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove service file: %w", err)
+	// Remove XDG autostart file
+	if err := os.Remove(s.autostartPath()); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove autostart file: %w", err)
 	}
 
-	// Reload systemd daemon
-	s.runSystemctl("daemon-reload")
+	// Also clean up legacy systemd service if present
+	s.cleanupLegacySystemd()
 
 	return nil
+}
+
+func (s *linuxService) cleanupLegacySystemd() {
+	servicePath := s.systemdServicePath()
+	if _, err := os.Stat(servicePath); err == nil {
+		// Stop and disable the systemd service
+		exec.Command("systemctl", "--user", "stop", appName+".service").Run()
+		exec.Command("systemctl", "--user", "disable", appName+".service").Run()
+		os.Remove(servicePath)
+		exec.Command("systemctl", "--user", "daemon-reload").Run()
+	}
 }
 
 func (s *linuxService) IsInstalled() bool {
-	_, err := os.Stat(s.servicePath())
-	return err == nil
+	// Check XDG autostart
+	if _, err := os.Stat(s.autostartPath()); err == nil {
+		return true
+	}
+	// Also check legacy systemd service
+	if _, err := os.Stat(s.systemdServicePath()); err == nil {
+		return true
+	}
+	return false
 }
 
 func (s *linuxService) Status() (string, error) {
-	if !s.IsInstalled() {
+	autostartExists := false
+	if _, err := os.Stat(s.autostartPath()); err == nil {
+		autostartExists = true
+	}
+
+	systemdExists := false
+	if _, err := os.Stat(s.systemdServicePath()); err == nil {
+		systemdExists = true
+	}
+
+	if !autostartExists && !systemdExists {
 		return "not installed", nil
 	}
 
-	// Check if running
-	cmd := exec.Command("systemctl", "--user", "is-active", serviceName+".service")
-	output, _ := cmd.Output()
-
-	status := string(output)
-	if status == "active\n" || status == "active" {
-		return "running", nil
+	// Check if process is running
+	cmd := exec.Command("pgrep", "-x", appName)
+	if err := cmd.Run(); err == nil {
+		if autostartExists {
+			return "running (autostart)", nil
+		}
+		return "running (systemd)", nil
 	}
 
-	return "installed but not running", nil
-}
-
-func (s *linuxService) runSystemctl(args ...string) error {
-	allArgs := append([]string{"--user"}, args...)
-	cmd := exec.Command("systemctl", allArgs...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s: %s", err, string(output))
+	// Installed but not running
+	var methods []string
+	if autostartExists {
+		methods = append(methods, "autostart")
 	}
-	return nil
+	if systemdExists {
+		methods = append(methods, "systemd (legacy)")
+	}
+	return fmt.Sprintf("installed (%s) but not running", strings.Join(methods, ", ")), nil
 }

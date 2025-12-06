@@ -286,6 +286,18 @@ func WriteDataWithURL(readerName string, data []byte, dataType string, url strin
 	}
 	defer card.Disconnect(scard.LeaveCard)
 
+	// Get card status to obtain ATR for type detection
+	status, err := card.Status()
+	if err != nil {
+		return fmt.Errorf("failed to get card status: %w", err)
+	}
+
+	// Detect card type to determine write method
+	cardInfo := &Card{
+		ATR: hex.EncodeToString(status.Atr),
+	}
+	detectCardType(card, cardInfo)
+
 	var ndefMessage []byte
 
 	// If URL is provided and there's also data, create multi-record message
@@ -310,9 +322,16 @@ func WriteDataWithURL(readerName string, data []byte, dataType string, url strin
 		}
 	}
 
-	// Write NDEF message to NTAG card
-	if err := writeNTAGPages(card, 4, ndefMessage); err != nil {
-		return fmt.Errorf("failed to write NDEF message: %w", err)
+	// Write NDEF message based on card type
+	if cardInfo.Type == "MIFARE Classic" {
+		if err := writeMifareClassic(card, ndefMessage); err != nil {
+			return fmt.Errorf("failed to write NDEF message: %w", err)
+		}
+	} else {
+		// NTAG and other cards use page-based writes
+		if err := writeNTAGPages(card, 4, ndefMessage); err != nil {
+			return fmt.Errorf("failed to write NDEF message: %w", err)
+		}
 	}
 
 	return nil
@@ -486,6 +505,106 @@ func createNDEFRecord(tnf byte, recordType []byte, payload []byte, mb bool, me b
 	return tlv
 }
 
+// writeMifareClassic writes NDEF data to a MIFARE Classic card
+// Tries multiple common keys for authentication
+func writeMifareClassic(card *scard.Card, data []byte) error {
+	// Common keys to try:
+	// 1. Default transport key
+	// 2. NFC Forum default key
+	// 3. MAD key (for sector 0)
+	// 4. NDEF key
+	keys := [][]byte{
+		{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, // Default transport
+		{0xD3, 0xF7, 0xD3, 0xF7, 0xD3, 0xF7}, // NFC Forum default
+		{0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5}, // MAD key
+		{0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // Zero key
+	}
+
+	// For MIFARE Classic 1K NDEF:
+	// - Sector 0 contains MAD (skip it)
+	// - NDEF data starts at sector 1, block 4
+	// - Each sector has 4 blocks, last block is sector trailer (skip it)
+
+	// Pad data to 16-byte blocks
+	for len(data)%16 != 0 {
+		data = append(data, 0x00)
+	}
+
+	blockNum := 4 // Start at sector 1, block 0 (absolute block 4)
+	dataOffset := 0
+	lastAuthSector := -1
+	currentKeyIndex := -1
+
+	for dataOffset < len(data) {
+		// Skip sector trailers (every 4th block starting from block 3)
+		if (blockNum+1)%4 == 0 {
+			blockNum++
+			continue
+		}
+
+		sector := blockNum / 4
+
+		// Authenticate to the sector if we moved to a new sector
+		if sector != lastAuthSector {
+			authBlock := sector*4 + 3 // Sector trailer block
+			authenticated := false
+
+			// Try each key
+			for keyIdx, key := range keys {
+				// Load key into reader's key slot 0
+				loadKeyCmd := []byte{0xFF, 0x82, 0x00, 0x00, 0x06}
+				loadKeyCmd = append(loadKeyCmd, key...)
+
+				rsp, err := card.Transmit(loadKeyCmd)
+				if err != nil || len(rsp) < 2 || rsp[len(rsp)-2] != 0x90 {
+					continue
+				}
+
+				// Try Key A authentication
+				authCmd := []byte{0xFF, 0x86, 0x00, 0x00, 0x05, 0x01, 0x00, byte(authBlock), 0x60, 0x00}
+				rsp, err = card.Transmit(authCmd)
+				if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+					authenticated = true
+					currentKeyIndex = keyIdx
+					break
+				}
+
+				// Try Key B authentication
+				authCmd = []byte{0xFF, 0x86, 0x00, 0x00, 0x05, 0x01, 0x00, byte(authBlock), 0x61, 0x00}
+				rsp, err = card.Transmit(authCmd)
+				if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+					authenticated = true
+					currentKeyIndex = keyIdx
+					break
+				}
+			}
+
+			if !authenticated {
+				return fmt.Errorf("authentication failed for sector %d (block %d) - no valid key found", sector, blockNum)
+			}
+			lastAuthSector = sector
+		}
+
+		// Write 16 bytes to block
+		blockData := data[dataOffset : dataOffset+16]
+		writeCmd := []byte{0xFF, 0xD6, 0x00, byte(blockNum), 0x10}
+		writeCmd = append(writeCmd, blockData...)
+
+		rsp, err := card.Transmit(writeCmd)
+		if err != nil {
+			return fmt.Errorf("failed to write block %d: %w", blockNum, err)
+		}
+		if len(rsp) < 2 || rsp[len(rsp)-2] != 0x90 {
+			return fmt.Errorf("write failed at block %d: status %02X %02X (key index %d)", blockNum, rsp[len(rsp)-2], rsp[len(rsp)-1], currentKeyIndex)
+		}
+
+		blockNum++
+		dataOffset += 16
+	}
+
+	return nil
+}
+
 // writeNTAGPages writes data to NTAG card pages (4 bytes per page)
 func writeNTAGPages(card *scard.Card, startPage int, data []byte) error {
 	// Pad data to multiple of 4 bytes
@@ -498,19 +617,45 @@ func writeNTAGPages(card *scard.Card, startPage int, data []byte) error {
 		pageNum := startPage + (i / 4)
 		pageData := data[i : i+4]
 
-		// APDU command to write 4 bytes to a page: FF D6 00 [page] 04 [4 bytes]
+		// Try Method 1: Standard UPDATE BINARY command (works on most readers)
+		// APDU: FF D6 00 [page] 04 [4 bytes]
 		writeCmd := []byte{0xFF, 0xD6, 0x00, byte(pageNum), 0x04}
 		writeCmd = append(writeCmd, pageData...)
 
 		rsp, err := card.Transmit(writeCmd)
+		if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 && rsp[len(rsp)-1] == 0x00 {
+			continue // Success, next page
+		}
+
+		// Method 1 failed, try Method 2: ACR122U InCommunicateThru
+		// Uses pseudo-APDU to send raw NTAG WRITE command (0xA2)
+		// Format: FF 00 00 00 [len] D4 42 A2 [page] [4 bytes]
+		// Length = 2 (D4 42) + 1 (A2) + 1 (page) + 4 (data) = 8 bytes
+		directCmd := []byte{0xFF, 0x00, 0x00, 0x00, 0x08, 0xD4, 0x42, 0xA2, byte(pageNum)}
+		directCmd = append(directCmd, pageData...)
+
+		rsp, err = card.Transmit(directCmd)
 		if err != nil {
 			return fmt.Errorf("failed to write page %d: %w", pageNum, err)
 		}
 
-		// Check response
-		if len(rsp) < 2 || rsp[len(rsp)-2] != 0x90 || rsp[len(rsp)-1] != 0x00 {
-			return fmt.Errorf("write failed at page %d with status: %02X %02X", pageNum, rsp[len(rsp)-2], rsp[len(rsp)-1])
+		// ACR122U returns D5 43 00 90 00 on success
+		// Check for success
+		if len(rsp) >= 2 {
+			sw1, sw2 := rsp[len(rsp)-2], rsp[len(rsp)-1]
+			if sw1 == 0x90 && sw2 == 0x00 {
+				// Check inner status if present (D5 43 XX format)
+				if len(rsp) >= 3 && rsp[0] == 0xD5 && rsp[1] == 0x43 {
+					if rsp[2] != 0x00 {
+						return fmt.Errorf("write failed at page %d: card error %02X", pageNum, rsp[2])
+					}
+				}
+				continue // Success
+			}
+			return fmt.Errorf("write failed at page %d with status: %02X %02X", pageNum, sw1, sw2)
 		}
+
+		return fmt.Errorf("write failed at page %d: invalid response", pageNum)
 	}
 
 	return nil
@@ -547,72 +692,195 @@ func WaitForCard(readerName string) error {
 	return nil
 }
 
-// readNDEFData attempts to read NDEF data from an NTAG card
+// readMifareClassicBlock reads a 16-byte block from a MIFARE Classic card
+// Handles authentication with multiple common keys
+func readMifareClassicBlock(card *scard.Card, blockNum int, lastAuthSector *int) ([]byte, error) {
+	keys := [][]byte{
+		{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, // Default transport
+		{0xD3, 0xF7, 0xD3, 0xF7, 0xD3, 0xF7}, // NFC Forum default
+		{0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5}, // MAD key
+		{0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // Zero key
+	}
+
+	sector := blockNum / 4
+
+	// Authenticate if we're in a new sector
+	if *lastAuthSector != sector {
+		authBlock := sector*4 + 3
+		authenticated := false
+
+		for _, key := range keys {
+			// Load key
+			loadKeyCmd := []byte{0xFF, 0x82, 0x00, 0x00, 0x06}
+			loadKeyCmd = append(loadKeyCmd, key...)
+			rsp, err := card.Transmit(loadKeyCmd)
+			if err != nil || len(rsp) < 2 || rsp[len(rsp)-2] != 0x90 {
+				continue
+			}
+
+			// Try Key A
+			authCmd := []byte{0xFF, 0x86, 0x00, 0x00, 0x05, 0x01, 0x00, byte(authBlock), 0x60, 0x00}
+			rsp, err = card.Transmit(authCmd)
+			if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+				authenticated = true
+				break
+			}
+
+			// Try Key B
+			authCmd = []byte{0xFF, 0x86, 0x00, 0x00, 0x05, 0x01, 0x00, byte(authBlock), 0x61, 0x00}
+			rsp, err = card.Transmit(authCmd)
+			if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+				authenticated = true
+				break
+			}
+		}
+
+		if !authenticated {
+			return nil, fmt.Errorf("authentication failed for sector %d", sector)
+		}
+		*lastAuthSector = sector
+	}
+
+	// Read block: FF B0 00 [block] 10
+	readCmd := []byte{0xFF, 0xB0, 0x00, byte(blockNum), 0x10}
+	rsp, err := card.Transmit(readCmd)
+	if err != nil {
+		return nil, err
+	}
+	if len(rsp) < 18 || rsp[len(rsp)-2] != 0x90 {
+		return nil, fmt.Errorf("read failed: status %02X %02X", rsp[len(rsp)-2], rsp[len(rsp)-1])
+	}
+
+	return rsp[:16], nil
+}
+
+// readNTAGPage reads a single 4-byte page from an NTAG card
+// Uses fallback to ACR122U direct transmit if standard command fails
+func readNTAGPage(card *scard.Card, pageNum int) ([]byte, error) {
+	// Method 1: Standard READ BINARY command
+	readCmd := []byte{0xFF, 0xB0, 0x00, byte(pageNum), 0x04}
+	rsp, err := card.Transmit(readCmd)
+
+	if err == nil && len(rsp) >= 6 && rsp[len(rsp)-2] == 0x90 && rsp[len(rsp)-1] == 0x00 {
+		return rsp[:len(rsp)-2], nil
+	}
+
+	// Method 2: ACR122U InCommunicateThru with NTAG READ command (0x30)
+	// Format: FF 00 00 00 [len] D4 42 30 [page]
+	// NTAG READ returns 16 bytes (4 pages starting from pageNum)
+	directCmd := []byte{0xFF, 0x00, 0x00, 0x00, 0x04, 0xD4, 0x42, 0x30, byte(pageNum)}
+	rsp, err = card.Transmit(directCmd)
+
+	if err != nil {
+		return nil, fmt.Errorf("read failed: %w", err)
+	}
+
+	// ACR122U returns: D5 43 00 [16 bytes of data] 90 00
+	if len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 && rsp[len(rsp)-1] == 0x00 {
+		if len(rsp) >= 19 && rsp[0] == 0xD5 && rsp[1] == 0x43 && rsp[2] == 0x00 {
+			// Return first 4 bytes (one page) from the 16-byte response
+			return rsp[3:7], nil
+		}
+	}
+
+	return nil, fmt.Errorf("read failed with status: %02X %02X", rsp[len(rsp)-2], rsp[len(rsp)-1])
+}
+
+// readNDEFData attempts to read NDEF data from a card
 func readNDEFData(card *scard.Card, cardInfo *Card) {
 	logging.Debug(logging.CatCard, "Reading NDEF data", map[string]any{
 		"cardType": cardInfo.Type,
 	})
-	// Read pages 4-43 (NTAG213 has 45 pages total, pages 0-3 are reserved)
-	// Read 16 pages (64 bytes) at a time to avoid buffer issues
+
 	var allData []byte
-	maxPages := 40
-	if cardInfo.Type == "NTAG215" {
-		maxPages = 126
-	} else if cardInfo.Type == "NTAG216" {
-		maxPages = 222
-	}
 
-	// Read in chunks of 16 pages (64 bytes)
-	for startPage := 4; startPage < 4+maxPages; startPage += 16 {
-		pagesToRead := 16
-		if startPage+pagesToRead > 4+maxPages {
-			pagesToRead = 4 + maxPages - startPage
-		}
+	if cardInfo.Type == "MIFARE Classic" {
+		// MIFARE Classic: read blocks starting from sector 1 (block 4)
+		lastAuthSector := -1
+		for blockNum := 4; blockNum < 64; blockNum++ { // MIFARE 1K has 64 blocks
+			// Skip sector trailers
+			if (blockNum+1)%4 == 0 {
+				continue
+			}
 
-		readCmd := []byte{0xFF, 0xB0, 0x00, byte(startPage), byte(pagesToRead * 4)}
-		rsp, err := card.Transmit(readCmd)
+			blockData, err := readMifareClassicBlock(card, blockNum, &lastAuthSector)
+			if err != nil {
+				logging.Debug(logging.CatCard, "NDEF read failed", map[string]any{
+					"block": blockNum,
+					"error": err.Error(),
+				})
+				break
+			}
 
-		if err != nil || len(rsp) < 3 {
-			logging.Debug(logging.CatCard, "NDEF read failed", map[string]any{
-				"page":  startPage,
-				"error": fmt.Sprintf("%v", err),
-			})
-			break // Stop on error
-		}
+			allData = append(allData, blockData...)
 
-		// Check status
-		if rsp[len(rsp)-2] != 0x90 || rsp[len(rsp)-1] != 0x00 {
-			logging.Debug(logging.CatCard, "NDEF read bad status", map[string]any{
-				"page":   startPage,
-				"status": fmt.Sprintf("%02X %02X", rsp[len(rsp)-2], rsp[len(rsp)-1]),
-			})
-			break
-		}
-
-		// Append data (without status bytes)
-		allData = append(allData, rsp[:len(rsp)-2]...)
-
-		// If we got less data than expected, we've reached the end
-		if len(rsp)-2 < pagesToRead*4 {
-			break
-		}
-
-		// Check if we've found the terminator TLV
-		if len(allData) > 2 && allData[0] == 0x03 {
-			var ndefLength int
-			if allData[1] == 0xFF && len(allData) >= 4 {
-				ndefLength = int(allData[2])<<8 | int(allData[3])
-				if len(allData) >= 4+ndefLength+1 {
-					break // We have all the data
+			// Check for NDEF terminator
+			for _, b := range blockData {
+				if b == 0xFE {
+					goto done
 				}
-			} else if allData[1] != 0xFF {
-				ndefLength = int(allData[1])
-				if len(allData) >= 2+ndefLength+1 {
-					break // We have all the data
+			}
+
+			// Check if we have complete NDEF message
+			if len(allData) > 2 && allData[0] == 0x03 {
+				var ndefLength, ndefStart int
+				if allData[1] == 0xFF && len(allData) >= 4 {
+					ndefLength = int(allData[2])<<8 | int(allData[3])
+					ndefStart = 4
+				} else if allData[1] != 0xFF {
+					ndefLength = int(allData[1])
+					ndefStart = 2
+				}
+				if ndefStart > 0 && len(allData) >= ndefStart+ndefLength+1 {
+					break
+				}
+			}
+		}
+	} else {
+		// NTAG and other cards: read pages starting from page 4
+		maxPages := 40
+		if cardInfo.Type == "NTAG215" {
+			maxPages = 126
+		} else if cardInfo.Type == "NTAG216" {
+			maxPages = 222
+		}
+
+		for pageNum := 4; pageNum < 4+maxPages; pageNum++ {
+			pageData, err := readNTAGPage(card, pageNum)
+			if err != nil {
+				logging.Debug(logging.CatCard, "NDEF read failed", map[string]any{
+					"page":  pageNum,
+					"error": err.Error(),
+				})
+				break
+			}
+
+			allData = append(allData, pageData...)
+
+			// Check for NDEF terminator
+			for _, b := range pageData {
+				if b == 0xFE {
+					goto done
+				}
+			}
+
+			// Check if we have complete NDEF message
+			if len(allData) > 2 && allData[0] == 0x03 {
+				var ndefLength, ndefStart int
+				if allData[1] == 0xFF && len(allData) >= 4 {
+					ndefLength = int(allData[2])<<8 | int(allData[3])
+					ndefStart = 4
+				} else if allData[1] != 0xFF {
+					ndefLength = int(allData[1])
+					ndefStart = 2
+				}
+				if ndefStart > 0 && len(allData) >= ndefStart+ndefLength+1 {
+					break
 				}
 			}
 		}
 	}
+done:
 
 	logging.Debug(logging.CatCard, "NDEF data read complete", map[string]any{
 		"totalBytes": len(allData),

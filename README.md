@@ -89,16 +89,16 @@ sudo systemctl enable --now pcscd
 tar -xzf nfc-agent_*_linux_amd64.tar.gz
 sudo mv nfc-agent /usr/local/bin/
 
-# Install PC/SC daemon
-sudo pacman -S pcsclite ccid  # Arch (ccid provides USB reader drivers)
-sudo systemctl enable --now pcscd
+# Install PC/SC daemon and drivers
+sudo pacman -S pcsclite ccid
 
-# Add your user to the pcscd group for reader access
-sudo usermod -a -G pcscd $USER
-# Log out and back in for group changes to take effect
+# For ACS readers (ACR122U, ACR1252U, etc.), install the ACS-specific driver from AUR:
+yay -S acsccid   # or: paru -S acsccid
+
+sudo systemctl enable --now pcscd
 ```
 
-> **Note:** Unlike the `.deb` and `.rpm` packages, the tar.gz installation requires manual setup of the PC/SC daemon and user permissions. If you see "No readers found", ensure `pcscd` is running (`systemctl status pcscd`) and that you've logged out/in after adding yourself to the `pcscd` group.
+> **Note:** Unlike the `.deb` and `.rpm` packages, the tar.gz installation requires manual setup of the PC/SC daemon. If you see "No readers found", ensure `pcscd` is running (`systemctl status pcscd`).
 
 ## Quick Start
 
@@ -275,19 +275,40 @@ NFC Agent uses the PC/SC (Personal Computer/Smart Card) interface to communicate
    ```
 3. Try unplugging and reconnecting the reader
 
+**Linux: Kernel NFC modules conflict (ACR122U)**
+
+The Linux kernel's NFC subsystem (`pn533_usb`) may claim ACR122U readers before pcscd can access them. Check with:
+```bash
+lsmod | grep pn533
+```
+
+If modules are loaded, unload them and blacklist:
+```bash
+# Temporary fix
+sudo modprobe -r pn533_usb pn533 nfc
+sudo systemctl restart pcscd
+
+# Permanent fix - create blacklist file
+echo -e "blacklist pn533_usb\nblacklist pn533\nblacklist nfc" | sudo tee /etc/modprobe.d/blacklist-pn533.conf
+```
+
+**Arch Linux with ACS readers:** Install the `acsccid` driver from AUR:
+```bash
+yay -S acsccid
+sudo systemctl restart pcscd
+```
+
 ### "Failed to connect to card"
 
 1. Ensure the card is placed correctly on the reader
 2. Some readers have an LED that indicates card detection
 3. Try a different card to rule out card issues
 
-### Linux: Permission denied
+### Linux: "Rejected unauthorized PC/SC client"
 
-Add your user to the `pcscd` group or run with elevated privileges:
-```bash
-sudo usermod -a -G pcscd $USER
-# Log out and back in for changes to take effect
-```
+On modern Linux distributions (Fedora, Silverblue, etc.), PC/SC access is controlled by Polkit. NFC Agent must run as part of your graphical session to be authorized.
+
+**Solution:** Run `nfc-agent` directly from your terminal or use `nfc-agent install` to set up XDG autostart (starts automatically when you log in to your desktop).
 
 ## Contributing
 
