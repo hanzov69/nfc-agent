@@ -14,7 +14,10 @@ var (
 
 const (
 	MB_OK          = 0x00000000
+	MB_YESNO       = 0x00000004
 	MB_ICONINFO    = 0x00000040
+	MB_ICONQUESTION = 0x00000020
+	IDYES          = 6
 )
 
 const welcomeTitle = "NFC Agent"
@@ -60,4 +63,24 @@ func messageBox(title, message string) {
 		uintptr(unsafe.Pointer(titlePtr)),
 		uintptr(MB_OK|MB_ICONINFO),
 	)
+}
+
+const autostartPromptMessage = `Would you like NFC Agent to start automatically when you log in?
+
+This ensures the agent is always available for SimplyPrint.io and other applications.
+
+You can change this later in the status page settings.`
+
+// PromptAutostart shows a dialog asking if the user wants to enable auto-start.
+// Returns true if the user clicked "Yes".
+func PromptAutostart() bool {
+	titlePtr, _ := syscall.UTF16PtrFromString("NFC Agent")
+	messagePtr, _ := syscall.UTF16PtrFromString(autostartPromptMessage)
+	ret, _, _ := procMessageBoxW.Call(
+		0,
+		uintptr(unsafe.Pointer(messagePtr)),
+		uintptr(unsafe.Pointer(titlePtr)),
+		uintptr(MB_YESNO|MB_ICONQUESTION),
+	)
+	return ret == IDYES
 }

@@ -4,6 +4,7 @@ package welcome
 
 import (
 	"os/exec"
+	"strings"
 )
 
 const welcomeTitle = "NFC Agent"
@@ -54,4 +55,21 @@ func escapeAppleScript(s string) string {
 		}
 	}
 	return result
+}
+
+const autostartPromptMessage = `Would you like NFC Agent to start automatically when you log in?
+
+This ensures the agent is always available for SimplyPrint.io and other applications.
+
+You can change this later in the status page settings.`
+
+// PromptAutostart shows a dialog asking if the user wants to enable auto-start.
+// Returns true if the user clicked "Yes".
+func PromptAutostart() bool {
+	script := `display dialog "` + escapeAppleScript(autostartPromptMessage) + `" with title "NFC Agent" buttons {"No", "Yes"} default button 2 with icon note`
+	out, err := exec.Command("osascript", "-e", script).Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), "Yes")
 }

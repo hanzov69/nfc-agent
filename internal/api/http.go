@@ -11,6 +11,7 @@ import (
 	"github.com/SimplyPrint/nfc-agent/internal/core"
 	"github.com/SimplyPrint/nfc-agent/internal/data"
 	"github.com/SimplyPrint/nfc-agent/internal/logging"
+	"github.com/SimplyPrint/nfc-agent/internal/service"
 	"github.com/SimplyPrint/nfc-agent/internal/web"
 )
 
@@ -20,6 +21,14 @@ var (
 	BuildTime = "unknown"
 	GitCommit = "unknown"
 )
+
+// shutdownHandler is called when a shutdown is requested via API
+var shutdownHandler func()
+
+// SetShutdownHandler sets the callback for shutdown requests
+func SetShutdownHandler(handler func()) {
+	shutdownHandler = handler
+}
 
 // NewMux constructs and returns the HTTP mux for the API.
 func NewMux() *http.ServeMux {
@@ -35,6 +44,8 @@ func NewMux() *http.ServeMux {
 	mux.HandleFunc("/v1/version", corsMiddleware(handleVersion))
 	mux.HandleFunc("/v1/health", corsMiddleware(handleHealth))
 	mux.HandleFunc("/v1/logs", corsMiddleware(handleLogs))
+	mux.HandleFunc("/v1/shutdown", corsMiddleware(handleShutdown))
+	mux.HandleFunc("/v1/autostart", corsMiddleware(handleAutostart))
 	return mux
 }
 
@@ -457,6 +468,30 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func handleShutdown(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	if shutdownHandler == nil {
+		respondJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "shutdown not available",
+		})
+		return
+	}
+
+	logging.Info(logging.CatSystem, "Shutdown requested via API", nil)
+	respondJSON(w, http.StatusOK, map[string]string{
+		"success": "shutting down",
+	})
+
+	// Trigger shutdown after response is sent
+	go func() {
+		shutdownHandler()
+	}()
+}
+
 func respondJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -480,6 +515,73 @@ func handleSupportedReaders(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"readers": readers,
 	})
+}
+
+func handleAutostart(w http.ResponseWriter, r *http.Request) {
+	svc := service.New()
+
+	switch r.Method {
+	case http.MethodGet:
+		// Get auto-start status
+		installed := svc.IsInstalled()
+		status, _ := svc.Status()
+
+		respondJSON(w, http.StatusOK, map[string]interface{}{
+			"enabled": installed,
+			"status":  status,
+		})
+
+	case http.MethodPost:
+		// Enable auto-start
+		if svc.IsInstalled() {
+			respondJSON(w, http.StatusOK, map[string]string{
+				"success": "auto-start already enabled",
+			})
+			return
+		}
+
+		if err := svc.Install(); err != nil {
+			logging.Error(logging.CatSystem, "Failed to enable auto-start", map[string]any{
+				"error": err.Error(),
+			})
+			respondJSON(w, http.StatusInternalServerError, map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		logging.Info(logging.CatSystem, "Auto-start enabled via API", nil)
+		respondJSON(w, http.StatusOK, map[string]string{
+			"success": "auto-start enabled",
+		})
+
+	case http.MethodDelete:
+		// Disable auto-start
+		if !svc.IsInstalled() {
+			respondJSON(w, http.StatusOK, map[string]string{
+				"success": "auto-start already disabled",
+			})
+			return
+		}
+
+		if err := svc.Uninstall(); err != nil {
+			logging.Error(logging.CatSystem, "Failed to disable auto-start", map[string]any{
+				"error": err.Error(),
+			})
+			respondJSON(w, http.StatusInternalServerError, map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		logging.Info(logging.CatSystem, "Auto-start disabled via API", nil)
+		respondJSON(w, http.StatusOK, map[string]string{
+			"success": "auto-start disabled",
+		})
+
+	default:
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
 }
 
 func handleLogs(w http.ResponseWriter, r *http.Request) {

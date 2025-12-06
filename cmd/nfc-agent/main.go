@@ -93,6 +93,12 @@ func run(cfg *config.Config, headless bool) {
 		"version": api.Version,
 	})
 
+	// Set up shutdown handler for API endpoint
+	api.SetShutdownHandler(func() {
+		log.Println("Shutting down...")
+		os.Exit(0)
+	})
+
 	mux := api.NewMux()
 
 	// Add WebSocket endpoint
@@ -119,10 +125,24 @@ func run(cfg *config.Config, headless bool) {
 	if useTray {
 		log.Println("Starting with system tray...")
 
-		// Show welcome popup on first run
+		// Show welcome popup and auto-start prompt on first run
 		if welcome.IsFirstRun() {
 			go func() {
 				welcome.ShowWelcome()
+
+				// Check if auto-start is not already configured (e.g., by Homebrew)
+				svc := service.New()
+				if !svc.IsInstalled() {
+					// Prompt user to enable auto-start
+					if welcome.PromptAutostart() {
+						if err := svc.Install(); err != nil {
+							log.Printf("Failed to enable auto-start: %v", err)
+						} else {
+							log.Println("Auto-start enabled")
+						}
+					}
+				}
+
 				_ = welcome.MarkAsShown() // Ignore error - non-critical
 			}()
 		}

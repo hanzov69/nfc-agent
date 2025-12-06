@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <title>NFC Agent Status</title>
     <style>
         :root {
@@ -47,7 +48,7 @@
         .logo {
             width: 40px;
             height: 40px;
-            background: var(--accent);
+            background: white;
             border-radius: 8px;
             display: flex;
             align-items: center;
@@ -320,12 +321,151 @@
             font-size: 11px;
             color: var(--text-muted);
         }
+
+        /* Test section styles */
+        .test-section {
+            padding: 4px 0;
+        }
+
+        .test-row {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .test-btn {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
+        .test-btn:hover {
+            opacity: 0.9;
+        }
+
+        .test-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .test-result {
+            font-size: 12px;
+            padding: 8px;
+            border-radius: 6px;
+            display: none;
+        }
+
+        .test-result.show {
+            display: block;
+        }
+
+        .test-result.success {
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--success);
+        }
+
+        .test-result.error {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--error);
+        }
+
+        .test-result.info {
+            background: rgba(59, 130, 246, 0.1);
+            color: var(--text);
+        }
+
+        .test-result pre {
+            margin: 4px 0 0 0;
+            font-size: 11px;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        /* Toggle switch styles */
+        .toggle-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+        }
+
+        .toggle-label {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .toggle-label-text {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .toggle-label-desc {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            flex-shrink: 0;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--border);
+            transition: 0.2s;
+            border-radius: 24px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.2s;
+            border-radius: 50%;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: var(--success);
+        }
+
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(20px);
+        }
+
+        .toggle-switch input:disabled + .toggle-slider {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <div class="logo">N</div>
+            <div class="logo"><img src="/favicon.ico" alt="NFC Agent" width="24" height="24"></div>
             <h1>NFC Agent</h1>
         </header>
 
@@ -355,6 +495,22 @@
 
         <div class="card">
             <div class="card-header">
+                <span class="card-title">Settings</span>
+            </div>
+            <div class="toggle-row">
+                <div class="toggle-label">
+                    <span class="toggle-label-text">Start on login</span>
+                    <span class="toggle-label-desc" id="autostart-status">Loading...</span>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="autostart-toggle" onchange="toggleAutostart()" disabled>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
                 <span class="card-title">Connected Readers</span>
                 <span class="refresh-indicator" id="reader-count">0 readers</span>
             </div>
@@ -364,6 +520,38 @@
                     <div>No readers connected</div>
                 </li>
             </ul>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Test Read/Write</span>
+                <select id="test-reader" style="background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 4px 8px; border-radius: 4px; font-size: 12px;">
+                    <option value="">No readers</option>
+                </select>
+            </div>
+            <div class="test-section" id="test-section">
+                <div id="test-no-readers" class="empty-state" style="padding: 16px;">
+                    <div style="color: var(--text-muted);">Connect a reader to test</div>
+                </div>
+                <div id="test-controls" style="display: none;">
+                    <div class="test-row">
+                        <button onclick="testRead()" id="btn-read" class="test-btn">Read Card</button>
+                        <div id="read-result" class="test-result"></div>
+                    </div>
+                    <div class="test-row" style="margin-top: 12px;">
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                            <select id="write-type" style="background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px 8px; border-radius: 4px; font-size: 12px;">
+                                <option value="text">Text</option>
+                                <option value="url">URL</option>
+                                <option value="json">JSON</option>
+                            </select>
+                            <input type="text" id="write-data" placeholder="Data to write..." style="flex: 1; min-width: 150px; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px 8px; border-radius: 4px; font-size: 12px;">
+                            <button onclick="testWrite()" id="btn-write" class="test-btn">Write</button>
+                        </div>
+                        <div id="write-result" class="test-result"></div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="card">
@@ -398,6 +586,7 @@
         <footer>
             <p>NFC Agent by <a href="https://simplyprint.io" target="_blank">SimplyPrint</a></p>
             <p style="margin-top: 4px;">Auto-refreshes every 5 seconds</p>
+            <button onclick="shutdownAgent()" style="margin-top: 12px; background: var(--error); color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;">Exit Agent</button>
         </footer>
     </div>
 
@@ -444,6 +633,9 @@
             const count = document.getElementById('reader-count');
 
             count.textContent = readers.length === 1 ? '1 reader' : `${readers.length} readers`;
+
+            // Update test dropdown
+            updateTestReaderDropdown(readers);
 
             if (readers.length === 0) {
                 list.innerHTML = `
@@ -580,6 +772,176 @@
             }
         }
 
+        async function shutdownAgent() {
+            if (!confirm('Are you sure you want to exit the NFC Agent?')) {
+                return;
+            }
+            try {
+                await fetch('/v1/shutdown', { method: 'POST' });
+                document.body.innerHTML = '<div style="display: flex; align-items: center; justify-content: center; height: 100vh; color: var(--text-muted);">NFC Agent has been stopped.</div>';
+            } catch (error) {
+                console.error('Failed to shutdown:', error);
+            }
+        }
+
+        // Test functions
+        let cachedReaders = [];
+
+        function updateTestReaderDropdown(readers) {
+            cachedReaders = readers;
+            const select = document.getElementById('test-reader');
+            const noReaders = document.getElementById('test-no-readers');
+            const controls = document.getElementById('test-controls');
+
+            if (readers.length === 0) {
+                select.innerHTML = '<option value="">No readers</option>';
+                select.style.display = 'none';
+                noReaders.style.display = 'block';
+                controls.style.display = 'none';
+            } else {
+                select.innerHTML = readers.map((r, i) =>
+                    `<option value="${i}">${escapeHtml(r.name)}</option>`
+                ).join('');
+                select.style.display = 'block';
+                noReaders.style.display = 'none';
+                controls.style.display = 'block';
+            }
+        }
+
+        function showResult(elementId, type, message) {
+            const el = document.getElementById(elementId);
+            el.className = `test-result show ${type}`;
+            el.innerHTML = message;
+        }
+
+        async function testRead() {
+            const select = document.getElementById('test-reader');
+            const readerIndex = select.value;
+
+            if (readerIndex === '' || cachedReaders.length === 0) {
+                showResult('read-result', 'error', 'No reader selected');
+                return;
+            }
+
+            showResult('read-result', 'info', 'Reading...');
+
+            try {
+                const res = await fetch(`/v1/readers/${readerIndex}/card`);
+                const data = await res.json();
+
+                if (!res.ok) {
+                    showResult('read-result', 'error', data.error || 'Read failed');
+                    return;
+                }
+
+                let html = `<strong>UID:</strong> ${escapeHtml(data.uid)}<br>`;
+                html += `<strong>Type:</strong> ${escapeHtml(data.type || 'Unknown')}`;
+                if (data.data) {
+                    html += `<br><strong>Data:</strong> <pre>${escapeHtml(data.data)}</pre>`;
+                }
+                if (data.url) {
+                    html += `<br><strong>URL:</strong> ${escapeHtml(data.url)}`;
+                }
+                showResult('read-result', 'success', html);
+            } catch (error) {
+                showResult('read-result', 'error', 'Failed to read card');
+            }
+        }
+
+        async function testWrite() {
+            const select = document.getElementById('test-reader');
+            const readerIndex = select.value;
+            const dataType = document.getElementById('write-type').value;
+            const data = document.getElementById('write-data').value;
+
+            if (readerIndex === '' || cachedReaders.length === 0) {
+                showResult('write-result', 'error', 'No reader selected');
+                return;
+            }
+
+            if (!data.trim()) {
+                showResult('write-result', 'error', 'Please enter data to write');
+                return;
+            }
+
+            showResult('write-result', 'info', 'Writing...');
+
+            try {
+                const res = await fetch(`/v1/readers/${readerIndex}/card`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ data, dataType })
+                });
+                const result = await res.json();
+
+                if (!res.ok) {
+                    showResult('write-result', 'error', result.error || 'Write failed');
+                    return;
+                }
+
+                showResult('write-result', 'success', 'Written successfully!');
+                document.getElementById('write-data').value = '';
+            } catch (error) {
+                showResult('write-result', 'error', 'Failed to write to card');
+            }
+        }
+
+        // Auto-start functions
+        async function fetchAutostartStatus() {
+            try {
+                const res = await fetch('/v1/autostart');
+                const data = await res.json();
+
+                const toggle = document.getElementById('autostart-toggle');
+                const status = document.getElementById('autostart-status');
+
+                toggle.checked = data.enabled;
+                toggle.disabled = false;
+
+                if (data.enabled) {
+                    status.textContent = 'NFC Agent will start automatically when you log in';
+                } else {
+                    status.textContent = 'NFC Agent will not start automatically';
+                }
+            } catch (error) {
+                console.error('Failed to fetch autostart status:', error);
+                document.getElementById('autostart-status').textContent = 'Unable to check status';
+            }
+        }
+
+        async function toggleAutostart() {
+            const toggle = document.getElementById('autostart-toggle');
+            const status = document.getElementById('autostart-status');
+            const enabled = toggle.checked;
+
+            toggle.disabled = true;
+            status.textContent = enabled ? 'Enabling...' : 'Disabling...';
+
+            try {
+                const res = await fetch('/v1/autostart', {
+                    method: enabled ? 'POST' : 'DELETE'
+                });
+                const data = await res.json();
+
+                if (!res.ok) {
+                    throw new Error(data.error || 'Failed to update autostart');
+                }
+
+                if (enabled) {
+                    status.textContent = 'NFC Agent will start automatically when you log in';
+                } else {
+                    status.textContent = 'NFC Agent will not start automatically';
+                }
+            } catch (error) {
+                console.error('Failed to toggle autostart:', error);
+                status.textContent = 'Error: ' + error.message;
+                // Revert toggle state
+                toggle.checked = !enabled;
+            } finally {
+                toggle.disabled = false;
+            }
+        }
+
         // Add event listeners for filter changes
         document.getElementById('log-level').addEventListener('change', fetchLogs);
         document.getElementById('log-category').addEventListener('change', fetchLogs);
@@ -587,6 +949,7 @@
         // Initial fetch
         fetchData();
         fetchLogs();
+        fetchAutostartStatus();
 
         // Refresh every 5 seconds
         setInterval(fetchData, 5000);

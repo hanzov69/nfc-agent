@@ -11,3 +11,9 @@ func ShowWelcome() {
 func ShowAbout(version string) {
 	// Linux runs as a headless service, no popup needed
 }
+
+// PromptAutostart is a no-op on Linux (headless service)
+// Auto-start is handled by systemd service installation
+func PromptAutostart() bool {
+	return false
+}
