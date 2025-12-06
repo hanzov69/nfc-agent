@@ -48,10 +48,15 @@ nfpms:
     formats:
       - deb
       - rpm
-    dependencies:
-      - libpcsclite1
     recommends:
       - pcscd
+    overrides:
+      deb:
+        dependencies:
+          - libpcsclite1
+      rpm:
+        dependencies:
+          - pcsc-lite-libs
     contents:
       - src: ./build/linux/nfc-agent.service
         dst: /usr/lib/systemd/user/nfc-agent.service

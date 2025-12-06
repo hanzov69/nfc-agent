@@ -64,7 +64,7 @@ Download the installer (`.exe`) from [GitHub Releases](https://github.com/Simply
 
 ```bash
 # Download the .deb package from GitHub Releases, then:
-sudo dpkg -i nfc-agent_*.deb
+sudo apt install ./NFC-Agent-*.deb
 
 # Install PC/SC daemon if not already installed
 sudo apt install pcscd
@@ -75,7 +75,7 @@ sudo systemctl enable --now pcscd
 
 ```bash
 # Download the .rpm package from GitHub Releases, then:
-sudo rpm -i nfc-agent-*.rpm
+sudo dnf install ./NFC-Agent-*.rpm
 
 # Install PC/SC daemon
 sudo dnf install pcsc-lite
