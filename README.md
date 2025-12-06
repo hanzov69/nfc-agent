@@ -163,6 +163,10 @@ See the [SDK documentation](sdk/README.md) for detailed API reference.
 Install the official SDK for browser and Node.js:
 
 ```bash
+# Add to .npmrc (one-time setup)
+echo "@simplyprint:registry=https://npm.pkg.github.com" >> .npmrc
+
+# Install
 npm install @simplyprint/nfc-agent
 ```
 
