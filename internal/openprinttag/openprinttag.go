@@ -88,28 +88,59 @@ type MainSection struct {
 	ActualNettoFullWeight  float32 `cbor:"17,keyasint,omitempty"`
 	EmptyContainerWeight   float32 `cbor:"18,keyasint,omitempty"`
 
-	// Colors (keys 19-27) - RGB or RGBA as byte arrays
-	PrimaryColor   []byte `cbor:"19,keyasint,omitempty"`
-	SecondaryColor []byte `cbor:"20,keyasint,omitempty"`
-	TertiaryColor  []byte `cbor:"21,keyasint,omitempty"`
+	// Colors (keys 19-24) - RGB or RGBA as byte arrays
+	PrimaryColor    []byte `cbor:"19,keyasint,omitempty"`
+	SecondaryColor0 []byte `cbor:"20,keyasint,omitempty"`
+	SecondaryColor1 []byte `cbor:"21,keyasint,omitempty"`
+	SecondaryColor2 []byte `cbor:"22,keyasint,omitempty"`
+	SecondaryColor3 []byte `cbor:"23,keyasint,omitempty"`
+	SecondaryColor4 []byte `cbor:"24,keyasint,omitempty"`
+
+	// Transmission distance (key 27) - HueForge TD value
+	TransmissionDistance float32 `cbor:"27,keyasint,omitempty"`
 
 	// Tags (key 28)
 	Tags []uint8 `cbor:"28,keyasint,omitempty"`
 
 	// Physical properties (keys 29-33)
-	Density          float32 `cbor:"29,keyasint,omitempty"`
-	FilamentDiameter float32 `cbor:"30,keyasint,omitempty"`
-	ShoreHardnessA   uint8   `cbor:"31,keyasint,omitempty"`
+	Density           float32 `cbor:"29,keyasint,omitempty"`
+	FilamentDiameter  float32 `cbor:"30,keyasint,omitempty"`
+	ShoreHardnessA    uint8   `cbor:"31,keyasint,omitempty"`
+	ShoreHardnessD    uint8   `cbor:"32,keyasint,omitempty"`
+	MinNozzleDiameter float32 `cbor:"33,keyasint,omitempty"`
 
-	// Temperature settings (keys 34-36)
-	MinPrintTemp     uint16 `cbor:"34,keyasint,omitempty"`
-	MaxPrintTemp     uint16 `cbor:"35,keyasint,omitempty"`
-	PreheatTemp      uint16 `cbor:"36,keyasint,omitempty"`
+	// Temperature settings (keys 34-41)
+	MinPrintTemp   uint16 `cbor:"34,keyasint,omitempty"`
+	MaxPrintTemp   uint16 `cbor:"35,keyasint,omitempty"`
+	PreheatTemp    uint16 `cbor:"36,keyasint,omitempty"`
+	MinBedTemp     uint16 `cbor:"37,keyasint,omitempty"`
+	MaxBedTemp     uint16 `cbor:"38,keyasint,omitempty"`
+	MinChamberTemp uint16 `cbor:"39,keyasint,omitempty"`
+	MaxChamberTemp uint16 `cbor:"40,keyasint,omitempty"`
+	ChamberTemp    uint16 `cbor:"41,keyasint,omitempty"`
+
+	// Container/spool dimensions (keys 42-45)
+	ContainerWidth         uint16 `cbor:"42,keyasint,omitempty"` // mm
+	ContainerOuterDiameter uint16 `cbor:"43,keyasint,omitempty"` // mm
+	ContainerInnerDiameter uint16 `cbor:"44,keyasint,omitempty"` // mm
+	ContainerHoleDiameter  uint16 `cbor:"45,keyasint,omitempty"` // mm
+
+	// SLA viscosity (keys 46-49) - mPa·s
+	Viscosity18C float32 `cbor:"46,keyasint,omitempty"`
+	Viscosity25C float32 `cbor:"47,keyasint,omitempty"`
+	Viscosity40C float32 `cbor:"48,keyasint,omitempty"`
+	Viscosity60C float32 `cbor:"49,keyasint,omitempty"`
+
+	// SLA container/curing (keys 50-51)
+	ContainerVolumetricCapacity float32 `cbor:"50,keyasint,omitempty"` // ml (cm³)
+	CureWavelength              uint16  `cbor:"51,keyasint,omitempty"` // nm
 
 	// Additional metadata (keys 52-56)
-	MaterialAbbreviation string   `cbor:"52,keyasint,omitempty"`
-	CountryOfOrigin      string   `cbor:"55,keyasint,omitempty"`
-	Certifications       []uint8  `cbor:"56,keyasint,omitempty"`
+	MaterialAbbreviation string  `cbor:"52,keyasint,omitempty"`
+	NominalFullLength    uint32  `cbor:"53,keyasint,omitempty"` // mm
+	ActualFullLength     uint32  `cbor:"54,keyasint,omitempty"` // mm
+	CountryOfOrigin      string  `cbor:"55,keyasint,omitempty"`
+	Certifications       []uint8 `cbor:"56,keyasint,omitempty"`
 }
 
 // AuxSection contains mutable runtime data that printers can update.
@@ -150,11 +181,18 @@ type Response struct {
 	// Physical properties
 	PrimaryColor     string  `json:"primaryColor,omitempty"` // hex #RRGGBB or #RRGGBBAA
 	FilamentDiameter float32 `json:"filamentDiameter,omitempty"`
+	FilamentLength   uint32  `json:"filamentLength,omitempty"` // in mm
 	Density          float32 `json:"density,omitempty"`
+
+	// Weight details
+	ActualWeight float32 `json:"actualWeight,omitempty"` // actual netto weight
+	SpoolWeight  float32 `json:"spoolWeight,omitempty"`  // empty container weight
 
 	// Temperature settings
 	MinPrintTemp uint16 `json:"minPrintTemp,omitempty"`
 	MaxPrintTemp uint16 `json:"maxPrintTemp,omitempty"`
+	MinBedTemp   uint16 `json:"minBedTemp,omitempty"`
+	MaxBedTemp   uint16 `json:"maxBedTemp,omitempty"`
 
 	// Dates
 	ManufacturedDate uint32 `json:"manufacturedDate,omitempty"`
@@ -197,11 +235,16 @@ func (o *OpenPrintTag) ToResponse() *Response {
 		MaterialClass:    materialClassToString(o.Main.MaterialClass),
 		MaterialType:     materialTypeToString(o.Main.MaterialType),
 		NominalWeight:    o.Main.NominalNettoFullWeight,
+		ActualWeight:     o.Main.ActualNettoFullWeight,
+		SpoolWeight:      o.Main.EmptyContainerWeight,
 		ConsumedWeight:   o.Aux.ConsumedWeight,
 		FilamentDiameter: o.Main.FilamentDiameter,
+		FilamentLength:   o.Main.ActualFullLength,
 		Density:          o.Main.Density,
 		MinPrintTemp:     o.Main.MinPrintTemp,
 		MaxPrintTemp:     o.Main.MaxPrintTemp,
+		MinBedTemp:       o.Main.MinBedTemp,
+		MaxBedTemp:       o.Main.MaxBedTemp,
 		ManufacturedDate: o.Main.ManufacturedDate,
 		ExpirationDate:   o.Main.ExpirationDate,
 		Workgroup:        o.Aux.Workgroup,

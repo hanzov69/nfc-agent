@@ -1035,8 +1035,8 @@ done:
 			if mimeType == "application/json" {
 				cardInfo.Data = string(payload)
 				cardInfo.DataType = "json"
-			} else if mimeType == openprinttag.MIMEType {
-				// OpenPrintTag format (application/vnd.openprinttag)
+			} else if mimeType == openprinttag.MIMEType || mimeType == "application/cbor" {
+				// OpenPrintTag format (application/vnd.openprinttag or application/cbor)
 				opt, err := openprinttag.Decode(payload)
 				if err == nil {
 					resp := opt.ToResponse()

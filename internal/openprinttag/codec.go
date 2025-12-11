@@ -29,8 +29,10 @@ func init() {
 	}
 
 	// Configure decoder
+	// ExtraReturnErrors: ignore trailing data (NFC tags often have zero-padding)
 	decMode, err = cbor.DecOptions{
-		IntDec: cbor.IntDecConvertSigned,
+		IntDec:            cbor.IntDecConvertSigned,
+		ExtraReturnErrors: cbor.ExtraDecErrorNone,
 	}.DecMode()
 	if err != nil {
 		panic(fmt.Sprintf("failed to create CBOR decoder: %v", err))
@@ -174,6 +176,7 @@ func Decode(payload []byte) (*OpenPrintTag, error) {
 	}
 
 	// Decode Main section - starts right after meta
+	// Use streaming decoder to handle trailing zeros/padding on NFC tags
 	mainStart := metaEnd
 	mainEnd := int(opt.Meta.AuxOffset)
 	if mainEnd > len(payload) {
@@ -181,17 +184,19 @@ func Decode(payload []byte) (*OpenPrintTag, error) {
 	}
 	if mainStart < mainEnd {
 		mainData := payload[mainStart:mainEnd]
-		if err := decMode.Unmarshal(mainData, &opt.Main); err != nil {
+		mainDecoder := decMode.NewDecoder(bytes.NewReader(mainData))
+		if err := mainDecoder.Decode(&opt.Main); err != nil {
 			return nil, fmt.Errorf("failed to decode main section: %w", err)
 		}
 	}
 
 	// Decode Auxiliary section
+	// Use streaming decoder to handle trailing zeros/padding
 	if int(opt.Meta.AuxOffset) < len(payload) {
 		auxData := payload[opt.Meta.AuxOffset:]
-		if err := decMode.Unmarshal(auxData, &opt.Aux); err != nil {
-			// Aux section might be empty or malformed, ignore error
-		}
+		auxDecoder := decMode.NewDecoder(bytes.NewReader(auxData))
+		// Aux section might be empty or malformed, ignore error
+		_ = auxDecoder.Decode(&opt.Aux)
 	}
 
 	return opt, nil
@@ -323,15 +328,29 @@ func (m *MainSection) toKeyValuePairs() []keyValue {
 		kv = append(kv, keyValue{18, m.EmptyContainerWeight})
 	}
 
-	// Colors (keys 19-21)
+	// Colors (keys 19-24)
 	if len(m.PrimaryColor) > 0 {
 		kv = append(kv, keyValue{19, m.PrimaryColor})
 	}
-	if len(m.SecondaryColor) > 0 {
-		kv = append(kv, keyValue{20, m.SecondaryColor})
+	if len(m.SecondaryColor0) > 0 {
+		kv = append(kv, keyValue{20, m.SecondaryColor0})
 	}
-	if len(m.TertiaryColor) > 0 {
-		kv = append(kv, keyValue{21, m.TertiaryColor})
+	if len(m.SecondaryColor1) > 0 {
+		kv = append(kv, keyValue{21, m.SecondaryColor1})
+	}
+	if len(m.SecondaryColor2) > 0 {
+		kv = append(kv, keyValue{22, m.SecondaryColor2})
+	}
+	if len(m.SecondaryColor3) > 0 {
+		kv = append(kv, keyValue{23, m.SecondaryColor3})
+	}
+	if len(m.SecondaryColor4) > 0 {
+		kv = append(kv, keyValue{24, m.SecondaryColor4})
+	}
+
+	// Transmission distance (key 27)
+	if m.TransmissionDistance != 0 {
+		kv = append(kv, keyValue{27, m.TransmissionDistance})
 	}
 
 	// Tags (key 28)
@@ -339,7 +358,7 @@ func (m *MainSection) toKeyValuePairs() []keyValue {
 		kv = append(kv, keyValue{28, m.Tags})
 	}
 
-	// Physical properties (keys 29-31)
+	// Physical properties (keys 29-33)
 	if m.Density != 0 {
 		kv = append(kv, keyValue{29, m.Density})
 	}
@@ -349,8 +368,14 @@ func (m *MainSection) toKeyValuePairs() []keyValue {
 	if m.ShoreHardnessA != 0 {
 		kv = append(kv, keyValue{31, m.ShoreHardnessA})
 	}
+	if m.ShoreHardnessD != 0 {
+		kv = append(kv, keyValue{32, m.ShoreHardnessD})
+	}
+	if m.MinNozzleDiameter != 0 {
+		kv = append(kv, keyValue{33, m.MinNozzleDiameter})
+	}
 
-	// Temperature settings (keys 34-36)
+	// Temperature settings (keys 34-41)
 	if m.MinPrintTemp != 0 {
 		kv = append(kv, keyValue{34, m.MinPrintTemp})
 	}
@@ -360,10 +385,67 @@ func (m *MainSection) toKeyValuePairs() []keyValue {
 	if m.PreheatTemp != 0 {
 		kv = append(kv, keyValue{36, m.PreheatTemp})
 	}
+	if m.MinBedTemp != 0 {
+		kv = append(kv, keyValue{37, m.MinBedTemp})
+	}
+	if m.MaxBedTemp != 0 {
+		kv = append(kv, keyValue{38, m.MaxBedTemp})
+	}
+	if m.MinChamberTemp != 0 {
+		kv = append(kv, keyValue{39, m.MinChamberTemp})
+	}
+	if m.MaxChamberTemp != 0 {
+		kv = append(kv, keyValue{40, m.MaxChamberTemp})
+	}
+	if m.ChamberTemp != 0 {
+		kv = append(kv, keyValue{41, m.ChamberTemp})
+	}
+
+	// Container/spool dimensions (keys 42-45)
+	if m.ContainerWidth != 0 {
+		kv = append(kv, keyValue{42, m.ContainerWidth})
+	}
+	if m.ContainerOuterDiameter != 0 {
+		kv = append(kv, keyValue{43, m.ContainerOuterDiameter})
+	}
+	if m.ContainerInnerDiameter != 0 {
+		kv = append(kv, keyValue{44, m.ContainerInnerDiameter})
+	}
+	if m.ContainerHoleDiameter != 0 {
+		kv = append(kv, keyValue{45, m.ContainerHoleDiameter})
+	}
+
+	// SLA viscosity (keys 46-49)
+	if m.Viscosity18C != 0 {
+		kv = append(kv, keyValue{46, m.Viscosity18C})
+	}
+	if m.Viscosity25C != 0 {
+		kv = append(kv, keyValue{47, m.Viscosity25C})
+	}
+	if m.Viscosity40C != 0 {
+		kv = append(kv, keyValue{48, m.Viscosity40C})
+	}
+	if m.Viscosity60C != 0 {
+		kv = append(kv, keyValue{49, m.Viscosity60C})
+	}
+
+	// SLA container/curing (keys 50-51)
+	if m.ContainerVolumetricCapacity != 0 {
+		kv = append(kv, keyValue{50, m.ContainerVolumetricCapacity})
+	}
+	if m.CureWavelength != 0 {
+		kv = append(kv, keyValue{51, m.CureWavelength})
+	}
 
 	// Additional metadata (keys 52-56)
 	if m.MaterialAbbreviation != "" {
 		kv = append(kv, keyValue{52, m.MaterialAbbreviation})
+	}
+	if m.NominalFullLength != 0 {
+		kv = append(kv, keyValue{53, m.NominalFullLength})
+	}
+	if m.ActualFullLength != 0 {
+		kv = append(kv, keyValue{54, m.ActualFullLength})
 	}
 	if m.CountryOfOrigin != "" {
 		kv = append(kv, keyValue{55, m.CountryOfOrigin})
