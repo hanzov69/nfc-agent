@@ -16,6 +16,7 @@ Built by [SimplyPrint](https://simplyprint.io) for enabling NFC tag interactions
 - **Cross-platform** - Works on Windows, macOS, and Linux
 - **Dual API** - HTTP REST API for simple operations, WebSocket for real-time events
 - **NDEF Support** - Read and write URL, text, JSON, and binary data
+- **OpenPrintTag** - Native support for the [OpenPrintTag](https://openprinttag.org) filament NFC standard
 - **Multiple Records** - Write multiple NDEF records in a single operation
 - **Security** - Password protection for NTAG chips, permanent card locking
 - **System Tray** - Native system tray integration with status indicator
@@ -218,6 +219,93 @@ await ws.writeCard(0, {
 ```
 
 See the full [SDK documentation](sdk/README.md) for more examples.
+
+## OpenPrintTag Support
+
+NFC Agent has native support for [OpenPrintTag](https://openprinttag.org), an open standard for encoding filament/material information on NFC tags. This enables 3D printers and software to automatically identify materials from spool NFC tags.
+
+### Reading OpenPrintTag Cards
+
+When reading a card with OpenPrintTag data (MIME type `application/vnd.openprinttag`), the response includes parsed filament information:
+
+```json
+{
+  "uid": "04:A2:B3:C4:D5:E6:07",
+  "type": "NTAG215",
+  "dataType": "openprinttag",
+  "data": {
+    "materialName": "PLA Galaxy Black",
+    "brandName": "Prusament",
+    "materialClass": "FFF",
+    "materialType": "PLA",
+    "primaryColor": "#1A1A1A",
+    "nominalWeight": 1000,
+    "remainingWeight": 750,
+    "filamentDiameter": 1.75,
+    "minPrintTemp": 215,
+    "maxPrintTemp": 230
+  }
+}
+```
+
+### Writing OpenPrintTag Cards
+
+Use `dataType: "openprinttag"` with JSON material data:
+
+**HTTP:**
+```bash
+curl -X POST http://127.0.0.1:32145/v1/readers/0/card \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dataType": "openprinttag",
+    "data": {
+      "materialName": "PLA Galaxy Black",
+      "brandName": "Prusament",
+      "materialClass": 0,
+      "materialType": 0,
+      "nominalWeight": 1000,
+      "primaryColor": "#1A1A1A",
+      "minPrintTemp": 215,
+      "maxPrintTemp": 230
+    }
+  }'
+```
+
+**WebSocket:**
+```json
+{
+  "type": "write_card",
+  "id": "1",
+  "reader": 0,
+  "dataType": "openprinttag",
+  "data": {
+    "materialName": "PETG Orange",
+    "brandName": "Prusa",
+    "materialClass": 0,
+    "materialType": 2,
+    "nominalWeight": 1000
+  }
+}
+```
+
+### OpenPrintTag Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `materialName` | string | Material display name (required) |
+| `brandName` | string | Brand/manufacturer name (required) |
+| `materialClass` | int | 0 = FFF (filament), 1 = SLA (resin) |
+| `materialType` | int | Material type (0=PLA, 1=ABS, 2=PETG, etc.) |
+| `nominalWeight` | float | Nominal weight in grams (required) |
+| `primaryColor` | string | Hex color code (#RRGGBB or #RRGGBBAA) |
+| `filamentDiameter` | float | Diameter in mm (default: 1.75) |
+| `density` | float | Material density in g/cm³ |
+| `minPrintTemp` | int | Minimum print temperature °C |
+| `maxPrintTemp` | int | Maximum print temperature °C |
+| `manufacturedDate` | int | Unix timestamp |
+| `expirationDate` | int | Unix timestamp |
+
+See the [OpenPrintTag specification](https://openprinttag.org) for the complete field reference.
 
 ## Building from Source
 
