@@ -122,7 +122,9 @@ export type WSMessageType =
   | 'unsubscribe'
   | 'supported_readers'
   | 'version'
-  | 'health';
+  | 'health'
+  | 'read_mifare_block'
+  | 'write_mifare_block';
 
 /**
  * WebSocket event types (server push)
@@ -271,4 +273,66 @@ export interface CardDetectedEvent {
  */
 export interface CardRemovedEvent {
   reader: number;
+}
+
+// ============================================================================
+// MIFARE Classic Types
+// ============================================================================
+
+/**
+ * MIFARE Classic key type for authentication
+ */
+export type MifareKeyType = 'A' | 'B';
+
+/**
+ * Response from reading a MIFARE Classic block
+ */
+export interface MifareBlockData {
+  /** Block number that was read */
+  block: number;
+  /** Block data as hex string (32 characters = 16 bytes) */
+  data: string;
+}
+
+/**
+ * Options for reading a MIFARE Classic block
+ */
+export interface MifareReadOptions {
+  /** Authentication key as hex string (12 characters = 6 bytes). If not provided, default keys are tried. */
+  key?: string;
+  /** Key type: 'A' or 'B' (default: 'A') */
+  keyType?: MifareKeyType;
+}
+
+/**
+ * Options for writing a MIFARE Classic block
+ */
+export interface MifareWriteOptions {
+  /** Block data as hex string (32 characters = 16 bytes) */
+  data: string;
+  /** Authentication key as hex string (12 characters = 6 bytes). If not provided, default keys are tried. */
+  key?: string;
+  /** Key type: 'A' or 'B' (default: 'A') */
+  keyType?: MifareKeyType;
+}
+
+/**
+ * Payload for read_mifare_block WebSocket request
+ */
+export interface ReadMifareBlockPayload {
+  readerIndex: number;
+  block: number;
+  key?: string;
+  keyType?: MifareKeyType;
+}
+
+/**
+ * Payload for write_mifare_block WebSocket request
+ */
+export interface WriteMifareBlockPayload {
+  readerIndex: number;
+  block: number;
+  data: string;
+  key?: string;
+  keyType?: MifareKeyType;
 }

@@ -226,6 +226,8 @@ func handleReaderRoutes(w http.ResponseWriter, r *http.Request) {
 			handlePassword(w, r, readerName)
 		case "records":
 			handleMultipleRecords(w, r, readerName)
+		case "mifare":
+			handleMifareBlock(w, r, readerName, parts)
 		default:
 			respondJSON(w, http.StatusNotFound, map[string]string{
 				"error": "unknown endpoint",
@@ -876,5 +878,133 @@ func handleUpdates(w http.ResponseWriter, r *http.Request) {
 	info := updateChecker.Check(forceRefresh)
 
 	respondJSON(w, http.StatusOK, info)
+}
+
+// parseMifareKey parses a hex string into a 6-byte MIFARE key.
+// Returns nil if the input is empty. Returns an error if the key is invalid.
+func parseMifareKey(keyHex string) ([]byte, error) {
+	if keyHex == "" {
+		return nil, nil
+	}
+	key, err := hex.DecodeString(keyHex)
+	if err != nil || len(key) != 6 {
+		return nil, fmt.Errorf("invalid key (must be 12 hex characters)")
+	}
+	return key, nil
+}
+
+// parseMifareKeyType converts a key type string ("A" or "B") to a byte.
+// Returns 'A' by default.
+func parseMifareKeyType(kt string) byte {
+	if kt == "B" || kt == "b" {
+		return 'B'
+	}
+	return 'A'
+}
+
+// handleMifareBlock handles read/write operations on MIFARE Classic blocks
+// GET /v1/readers/{n}/mifare/{block} - Read block
+// POST /v1/readers/{n}/mifare/{block} - Write block
+func handleMifareBlock(w http.ResponseWriter, r *http.Request, readerName string, parts []string) {
+	// Expect path: /v1/readers/{n}/mifare/{block}
+	if len(parts) < 5 {
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "missing block number (use /mifare/{block})",
+		})
+		return
+	}
+
+	blockNum, err := strconv.Atoi(parts[4])
+	if err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid block number",
+		})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		// Read block
+		// Optional query params: key (hex), keyType (A/B)
+		key, err := parseMifareKey(r.URL.Query().Get("key"))
+		if err != nil {
+			respondJSON(w, http.StatusBadRequest, map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
+		keyType := parseMifareKeyType(r.URL.Query().Get("keyType"))
+
+		data, err := core.ReadMifareBlock(readerName, blockNum, key, keyType)
+		if err != nil {
+			logging.Debug(logging.CatHTTP, "MIFARE read failed", map[string]any{
+				"reader": readerName,
+				"block":  blockNum,
+				"error":  err.Error(),
+			})
+			respondJSON(w, http.StatusBadRequest, map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		respondJSON(w, http.StatusOK, map[string]interface{}{
+			"block": blockNum,
+			"data":  hex.EncodeToString(data),
+		})
+
+	case http.MethodPost:
+		// Write block
+		var req struct {
+			Data    string `json:"data"`    // Hex string, 32 chars = 16 bytes
+			Key     string `json:"key"`     // Optional, hex string, 12 chars = 6 bytes
+			KeyType string `json:"keyType"` // Optional, "A" or "B"
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respondJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "invalid request body",
+			})
+			return
+		}
+
+		// Parse data
+		data, err := hex.DecodeString(req.Data)
+		if err != nil || len(data) != 16 {
+			respondJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "invalid data (must be 32 hex characters for 16 bytes)",
+			})
+			return
+		}
+
+		// Parse optional key
+		key, err := parseMifareKey(req.Key)
+		if err != nil {
+			respondJSON(w, http.StatusBadRequest, map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
+		keyType := parseMifareKeyType(req.KeyType)
+
+		if err := core.WriteMifareBlock(readerName, blockNum, data, key, keyType); err != nil {
+			logging.Debug(logging.CatHTTP, "MIFARE write failed", map[string]any{
+				"reader": readerName,
+				"block":  blockNum,
+				"error":  err.Error(),
+			})
+			respondJSON(w, http.StatusInternalServerError, map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		respondJSON(w, http.StatusOK, map[string]bool{
+			"success": true,
+		})
+
+	default:
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
 }
 

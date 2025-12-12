@@ -1510,3 +1510,192 @@ func WriteMultipleRecords(readerName string, records []NDEFRecord) error {
 
 	return nil
 }
+
+// defaultMifareKeys contains common MIFARE Classic authentication keys
+var defaultMifareKeys = [][]byte{
+	{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, // Default transport
+	{0xD3, 0xF7, 0xD3, 0xF7, 0xD3, 0xF7}, // NFC Forum default
+	{0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5}, // MAD key
+	{0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // Zero key
+}
+
+// isSectorTrailer returns true if the block is a sector trailer (contains keys and access bits)
+func isSectorTrailer(block int) bool {
+	// For MIFARE Classic 1K (sectors 0-15, 4 blocks each), trailer is every 4th block starting at 3
+	// For MIFARE Classic 4K, sectors 0-31 have 4 blocks, sectors 32-39 have 16 blocks
+	if block < 128 {
+		return (block+1)%4 == 0
+	}
+	// Large sectors (4K only): trailer at blocks 127+16n+15
+	return (block-128+1)%16 == 0
+}
+
+// authenticateMifareBlock authenticates to the sector containing the given block
+// If key is nil/empty, tries all default keys. keyType should be 0x60 (Key A) or 0x61 (Key B)
+func authenticateMifareBlock(card *scard.Card, blockNum int, key []byte, keyType byte) error {
+	sector := blockNum / 4
+	if blockNum >= 128 {
+		sector = 32 + (blockNum-128)/16
+	}
+
+	// Determine auth block (sector trailer)
+	var authBlock int
+	if blockNum < 128 {
+		authBlock = sector*4 + 3
+	} else {
+		authBlock = 128 + (sector-32)*16 + 15
+	}
+
+	// Default to Key A if not specified
+	if keyType != 0x60 && keyType != 0x61 {
+		keyType = 0x60
+	}
+
+	// Determine which keys to try
+	var keysToTry [][]byte
+	if len(key) == 6 {
+		keysToTry = [][]byte{key}
+	} else {
+		keysToTry = defaultMifareKeys
+	}
+
+	for _, k := range keysToTry {
+		// Load key into reader's key slot 0
+		loadKeyCmd := []byte{0xFF, 0x82, 0x00, 0x00, 0x06}
+		loadKeyCmd = append(loadKeyCmd, k...)
+		rsp, err := card.Transmit(loadKeyCmd)
+		if err != nil || len(rsp) < 2 || rsp[len(rsp)-2] != 0x90 {
+			continue
+		}
+
+		// Try specified key type first
+		authCmd := []byte{0xFF, 0x86, 0x00, 0x00, 0x05, 0x01, 0x00, byte(authBlock), keyType, 0x00}
+		rsp, err = card.Transmit(authCmd)
+		if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+			return nil // Success
+		}
+
+		// If using default keys, try the other key type as fallback
+		if len(key) != 6 {
+			otherKeyType := byte(0x61)
+			if keyType == 0x61 {
+				otherKeyType = 0x60
+			}
+			authCmd = []byte{0xFF, 0x86, 0x00, 0x00, 0x05, 0x01, 0x00, byte(authBlock), otherKeyType, 0x00}
+			rsp, err = card.Transmit(authCmd)
+			if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+				return nil // Success
+			}
+		}
+	}
+
+	return fmt.Errorf("authentication failed for sector %d (block %d)", sector, blockNum)
+}
+
+// ReadMifareBlock reads a 16-byte block from a MIFARE Classic card.
+// If key is nil/empty, tries default keys (FFFFFFFFFFFF, D3F7D3F7D3F7, etc.)
+// keyType should be 'A' or 'B' (defaults to 'A')
+func ReadMifareBlock(readerName string, block int, key []byte, keyType byte) ([]byte, error) {
+	if block < 0 || block > 255 {
+		return nil, fmt.Errorf("invalid block number: %d (must be 0-255)", block)
+	}
+	if isSectorTrailer(block) {
+		return nil, fmt.Errorf("cannot read sector trailer block %d (contains authentication keys)", block)
+	}
+
+	ctx, err := scard.EstablishContext()
+	if err != nil {
+		return nil, fmt.Errorf("failed to establish context: %w", err)
+	}
+	defer ctx.Release()
+
+	card, err := ctx.Connect(readerName, scard.ShareShared, scard.ProtocolAny)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to reader: %w", err)
+	}
+	defer card.Disconnect(scard.LeaveCard)
+
+	// Convert key type character to APDU byte
+	var keyTypeByte byte = 0x60 // Default Key A
+	if keyType == 'B' || keyType == 'b' || keyType == 0x61 {
+		keyTypeByte = 0x61
+	}
+
+	// Authenticate
+	if err := authenticateMifareBlock(card, block, key, keyTypeByte); err != nil {
+		return nil, err
+	}
+
+	// Read block: FF B0 00 [block] 10
+	readCmd := []byte{0xFF, 0xB0, 0x00, byte(block), 0x10}
+	rsp, err := card.Transmit(readCmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read block %d: %w", block, err)
+	}
+	if len(rsp) < 18 || rsp[len(rsp)-2] != 0x90 {
+		return nil, fmt.Errorf("read failed for block %d: status %02X %02X", block, rsp[len(rsp)-2], rsp[len(rsp)-1])
+	}
+
+	logging.Info(logging.CatCard, "MIFARE block read", map[string]any{
+		"block": block,
+		"data":  hex.EncodeToString(rsp[:16]),
+	})
+
+	return rsp[:16], nil
+}
+
+// WriteMifareBlock writes 16 bytes to a MIFARE Classic block.
+// If key is nil/empty, tries default keys (FFFFFFFFFFFF, D3F7D3F7D3F7, etc.)
+// keyType should be 'A' or 'B' (defaults to 'A')
+func WriteMifareBlock(readerName string, block int, data []byte, key []byte, keyType byte) error {
+	if block < 0 || block > 255 {
+		return fmt.Errorf("invalid block number: %d (must be 0-255)", block)
+	}
+	if isSectorTrailer(block) {
+		return fmt.Errorf("cannot write to sector trailer block %d (contains authentication keys)", block)
+	}
+	if len(data) != 16 {
+		return fmt.Errorf("data must be exactly 16 bytes, got %d", len(data))
+	}
+
+	ctx, err := scard.EstablishContext()
+	if err != nil {
+		return fmt.Errorf("failed to establish context: %w", err)
+	}
+	defer ctx.Release()
+
+	card, err := ctx.Connect(readerName, scard.ShareShared, scard.ProtocolAny)
+	if err != nil {
+		return fmt.Errorf("failed to connect to reader: %w", err)
+	}
+	defer card.Disconnect(scard.LeaveCard)
+
+	// Convert key type character to APDU byte
+	var keyTypeByte byte = 0x60 // Default Key A
+	if keyType == 'B' || keyType == 'b' || keyType == 0x61 {
+		keyTypeByte = 0x61
+	}
+
+	// Authenticate
+	if err := authenticateMifareBlock(card, block, key, keyTypeByte); err != nil {
+		return err
+	}
+
+	// Write block: FF D6 00 [block] 10 [16 bytes]
+	writeCmd := []byte{0xFF, 0xD6, 0x00, byte(block), 0x10}
+	writeCmd = append(writeCmd, data...)
+	rsp, err := card.Transmit(writeCmd)
+	if err != nil {
+		return fmt.Errorf("failed to write block %d: %w", block, err)
+	}
+	if len(rsp) < 2 || rsp[len(rsp)-2] != 0x90 {
+		return fmt.Errorf("write failed for block %d: status %02X %02X", block, rsp[len(rsp)-2], rsp[len(rsp)-1])
+	}
+
+	logging.Info(logging.CatCard, "MIFARE block written", map[string]any{
+		"block": block,
+		"data":  hex.EncodeToString(data),
+	})
+
+	return nil
+}

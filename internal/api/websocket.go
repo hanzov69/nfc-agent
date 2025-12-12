@@ -248,6 +248,10 @@ func (c *WSClient) handleMessage(msg WSMessage) {
 		c.handleVersion(msg.ID)
 	case "health":
 		c.handleHealth(msg.ID)
+	case "read_mifare_block":
+		c.handleReadMifareBlock(msg.ID, msg.Payload)
+	case "write_mifare_block":
+		c.handleWriteMifareBlock(msg.ID, msg.Payload)
 	default:
 		logging.Warn(logging.CatWebSocket, "Unknown message type", map[string]any{
 			"type": msg.Type,
@@ -689,5 +693,86 @@ func (c *WSClient) handleHealth(id string) {
 	c.sendResponse(id, "health", map[string]interface{}{
 		"status":      "ok",
 		"readerCount": len(readers),
+	})
+}
+
+func (c *WSClient) handleReadMifareBlock(id string, payload json.RawMessage) {
+	var req struct {
+		ReaderIndex int    `json:"readerIndex"`
+		Block       int    `json:"block"`
+		Key         string `json:"key"`     // Optional, hex string
+		KeyType     string `json:"keyType"` // Optional, "A" or "B"
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		c.sendError(id, "invalid payload")
+		return
+	}
+
+	readers := core.ListReaders()
+	if req.ReaderIndex < 0 || req.ReaderIndex >= len(readers) {
+		c.sendError(id, "reader index out of range")
+		return
+	}
+
+	key, err := parseMifareKey(req.Key)
+	if err != nil {
+		c.sendError(id, err.Error())
+		return
+	}
+	keyType := parseMifareKeyType(req.KeyType)
+
+	data, err := core.ReadMifareBlock(readers[req.ReaderIndex].Name, req.Block, key, keyType)
+	if err != nil {
+		c.sendError(id, err.Error())
+		return
+	}
+
+	c.sendResponse(id, "mifare_block", map[string]interface{}{
+		"block": req.Block,
+		"data":  hex.EncodeToString(data),
+	})
+}
+
+func (c *WSClient) handleWriteMifareBlock(id string, payload json.RawMessage) {
+	var req struct {
+		ReaderIndex int    `json:"readerIndex"`
+		Block       int    `json:"block"`
+		Data        string `json:"data"`    // Hex string, 32 chars = 16 bytes
+		Key         string `json:"key"`     // Optional, hex string
+		KeyType     string `json:"keyType"` // Optional, "A" or "B"
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		c.sendError(id, "invalid payload")
+		return
+	}
+
+	readers := core.ListReaders()
+	if req.ReaderIndex < 0 || req.ReaderIndex >= len(readers) {
+		c.sendError(id, "reader index out of range")
+		return
+	}
+
+	// Parse data
+	data, err := hex.DecodeString(req.Data)
+	if err != nil || len(data) != 16 {
+		c.sendError(id, "invalid data (must be 32 hex characters for 16 bytes)")
+		return
+	}
+
+	key, err := parseMifareKey(req.Key)
+	if err != nil {
+		c.sendError(id, err.Error())
+		return
+	}
+	keyType := parseMifareKeyType(req.KeyType)
+
+	if err := core.WriteMifareBlock(readers[req.ReaderIndex].Name, req.Block, data, key, keyType); err != nil {
+		c.sendError(id, err.Error())
+		return
+	}
+
+	c.sendResponse(id, "mifare_write_success", map[string]interface{}{
+		"success": true,
+		"block":   req.Block,
 	})
 }

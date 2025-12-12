@@ -187,6 +187,34 @@ const health = await ws.health();
 console.log('Status:', health.status);
 ```
 
+### MIFARE Classic Raw Block Access
+
+For direct block-level access to MIFARE Classic cards (e.g., proprietary tag formats like QIDI BOX):
+
+```typescript
+// Read block 4 (first data block in sector 1)
+const block = await ws.readMifareBlock(0, 4);
+console.log(block.data); // hex string, e.g. "01120100000000000000000000000000"
+
+// Read with specific authentication key
+const block = await ws.readMifareBlock(0, 4, {
+  key: 'D3F7D3F7D3F7',
+  keyType: 'A'
+});
+
+// Write block 4
+await ws.writeMifareBlock(0, 4, {
+  data: '01120100000000000000000000000000',
+  key: 'FFFFFFFFFFFF'
+});
+```
+
+**Notes:**
+- Block numbers: 0-63 for MIFARE Classic 1K, 0-255 for 4K
+- Each block is 16 bytes (32 hex characters)
+- Sector trailers (blocks 3, 7, 11, 15, etc.) are blocked for safety
+- If no key is provided, common default keys are tried automatically
+
 ---
 
 ## REST API
@@ -224,6 +252,15 @@ console.log('Version:', version.version);
 if (version.updateAvailable) {
   console.log('Update available:', version.latestVersion);
 }
+
+// MIFARE Classic raw block access
+const block = await client.readMifareBlock(0, 4, { key: 'FFFFFFFFFFFF' });
+console.log('Block data:', block.data);
+
+await client.writeMifareBlock(0, 4, {
+  data: '01120100000000000000000000000000',
+  key: 'FFFFFFFFFFFF'
+});
 ```
 
 ### Card Polling (REST)
@@ -268,6 +305,8 @@ poller.start();
 | `getSupportedReaders()` | Get supported hardware info |
 | `getVersion()` | Get agent version |
 | `health()` | Health check |
+| `readMifareBlock(reader, block, options?)` | Read raw MIFARE Classic block |
+| `writeMifareBlock(reader, block, options)` | Write raw MIFARE Classic block |
 
 #### WebSocket Events
 
@@ -289,6 +328,8 @@ poller.start();
 | `writeCard(reader, options)` | Write data to card |
 | `getSupportedReaders()` | Get supported hardware info |
 | `getVersion()` | Get agent version and update info |
+| `readMifareBlock(reader, block, options?)` | Read raw MIFARE Classic block |
+| `writeMifareBlock(reader, block, options)` | Write raw MIFARE Classic block |
 | `pollCard(reader, options)` | Create a CardPoller |
 
 ### Types
@@ -332,6 +373,25 @@ interface VersionInfo {
   updateAvailable?: boolean;  // true if a newer version exists
   latestVersion?: string;     // latest available version
   releaseUrl?: string;        // URL to download the update
+}
+
+// MIFARE Classic types
+type MifareKeyType = 'A' | 'B';
+
+interface MifareBlockData {
+  block: number;
+  data: string;  // 32 hex chars = 16 bytes
+}
+
+interface MifareReadOptions {
+  key?: string;       // 12 hex chars = 6 bytes
+  keyType?: MifareKeyType;
+}
+
+interface MifareWriteOptions {
+  data: string;       // 32 hex chars = 16 bytes
+  key?: string;       // 12 hex chars = 6 bytes
+  keyType?: MifareKeyType;
 }
 ```
 

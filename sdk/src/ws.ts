@@ -10,6 +10,9 @@ import type {
   HealthInfo,
   CardDetectedEvent,
   CardRemovedEvent,
+  MifareBlockData,
+  MifareReadOptions,
+  MifareWriteOptions,
 } from './types.js';
 import { ConnectionError, CardError, NFCAgentError } from './errors.js';
 
@@ -440,6 +443,60 @@ export class NFCAgentWebSocket {
   async writeRecords(readerIndex: number, records: NDEFRecord[]): Promise<void> {
     try {
       await this.request('write_records', { reader: readerIndex, records });
+    } catch (error) {
+      if (error instanceof NFCAgentError) {
+        throw new CardError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Read a raw 16-byte block from a MIFARE Classic card
+   * @param readerIndex - Index of the reader (0-based)
+   * @param block - Block number to read (0-63 for 1K, 0-255 for 4K)
+   * @param options - Optional authentication key and key type
+   * @returns Block data (16 bytes as hex string)
+   */
+  async readMifareBlock(
+    readerIndex: number,
+    block: number,
+    options?: MifareReadOptions
+  ): Promise<MifareBlockData> {
+    try {
+      return await this.request<MifareBlockData>('read_mifare_block', {
+        readerIndex,
+        block,
+        key: options?.key,
+        keyType: options?.keyType,
+      });
+    } catch (error) {
+      if (error instanceof NFCAgentError) {
+        throw new CardError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Write a raw 16-byte block to a MIFARE Classic card
+   * @param readerIndex - Index of the reader (0-based)
+   * @param block - Block number to write (0-63 for 1K, 0-255 for 4K)
+   * @param options - Write options including data and optional authentication key
+   */
+  async writeMifareBlock(
+    readerIndex: number,
+    block: number,
+    options: MifareWriteOptions
+  ): Promise<void> {
+    try {
+      await this.request('write_mifare_block', {
+        readerIndex,
+        block,
+        data: options.data,
+        key: options.key,
+        keyType: options.keyType,
+      });
     } catch (error) {
       if (error instanceof NFCAgentError) {
         throw new CardError(error.message);

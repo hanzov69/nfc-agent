@@ -7,6 +7,9 @@ import type {
   SupportedReadersResponse,
   APIErrorResponse,
   VersionInfo,
+  MifareBlockData,
+  MifareReadOptions,
+  MifareWriteOptions,
 } from './types.js';
 import { ConnectionError, CardError, APIError } from './errors.js';
 import { CardPoller } from './poller.js';
@@ -174,6 +177,68 @@ export class NFCAgentClient {
    */
   async getVersion(): Promise<VersionInfo> {
     return this.request<VersionInfo>('/v1/version');
+  }
+
+  /**
+   * Read a raw 16-byte block from a MIFARE Classic card
+   * @param readerIndex - Index of the reader (0-based)
+   * @param block - Block number to read (0-63 for 1K, 0-255 for 4K)
+   * @param options - Optional authentication key and key type
+   * @returns Block data (16 bytes as hex string)
+   * @throws CardError if read fails or authentication fails
+   */
+  async readMifareBlock(
+    readerIndex: number,
+    block: number,
+    options?: MifareReadOptions
+  ): Promise<MifareBlockData> {
+    const params = new URLSearchParams();
+    if (options?.key) {
+      params.set('key', options.key);
+    }
+    if (options?.keyType) {
+      params.set('keyType', options.keyType);
+    }
+    const query = params.toString();
+    const url = `/v1/readers/${readerIndex}/mifare/${block}${query ? `?${query}` : ''}`;
+
+    try {
+      return await this.request<MifareBlockData>(url);
+    } catch (error) {
+      if (error instanceof APIError) {
+        throw new CardError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Write a raw 16-byte block to a MIFARE Classic card
+   * @param readerIndex - Index of the reader (0-based)
+   * @param block - Block number to write (0-63 for 1K, 0-255 for 4K)
+   * @param options - Write options including data and optional authentication key
+   * @throws CardError if write fails or authentication fails
+   */
+  async writeMifareBlock(
+    readerIndex: number,
+    block: number,
+    options: MifareWriteOptions
+  ): Promise<void> {
+    try {
+      await this.request(`/v1/readers/${readerIndex}/mifare/${block}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          data: options.data,
+          key: options.key,
+          keyType: options.keyType,
+        }),
+      });
+    } catch (error) {
+      if (error instanceof APIError) {
+        throw new CardError(error.message);
+      }
+      throw error;
+    }
   }
 
   /**

@@ -175,6 +175,8 @@ Configure via environment variables:
 | `POST` | `/v1/readers/{n}/password` | Set password protection |
 | `DELETE` | `/v1/readers/{n}/password` | Remove password |
 | `POST` | `/v1/readers/{n}/records` | Write multiple NDEF records |
+| `GET` | `/v1/readers/{n}/mifare/{block}` | Read MIFARE Classic block |
+| `POST` | `/v1/readers/{n}/mifare/{block}` | Write MIFARE Classic block |
 | `GET` | `/v1/supported-readers` | List supported reader models |
 | `GET` | `/v1/version` | Get version and update info |
 | `GET` | `/v1/health` | Health check |
@@ -206,6 +208,7 @@ Connect to `ws://127.0.0.1:32145/v1/ws` for real-time card events.
 - `write_card` - Write data to card
 - `subscribe` / `unsubscribe` - Real-time card detection
 - `erase_card`, `lock_card`, `set_password`, `remove_password`
+- `read_mifare_block`, `write_mifare_block` - Raw MIFARE Classic block access
 - `version` - Get version and update info (same response as HTTP endpoint)
 
 **Events:**
@@ -251,6 +254,57 @@ await ws.writeCard(0, {
 ```
 
 See the full [SDK documentation](sdk/README.md) for more examples.
+
+## MIFARE Classic Raw Block Access
+
+For direct block-level access to MIFARE Classic cards (e.g., for proprietary tag formats like QIDI BOX filament tags):
+
+### HTTP API
+
+**Read block 4:**
+```bash
+curl "http://127.0.0.1:32145/v1/readers/0/mifare/4"
+```
+
+**Read with specific key:**
+```bash
+curl "http://127.0.0.1:32145/v1/readers/0/mifare/4?key=D3F7D3F7D3F7&keyType=A"
+```
+
+**Write block 4:**
+```bash
+curl -X POST http://127.0.0.1:32145/v1/readers/0/mifare/4 \
+  -H "Content-Type: application/json" \
+  -d '{"data": "01120100000000000000000000000000", "key": "D3F7D3F7D3F7"}'
+```
+
+### JavaScript SDK
+
+```typescript
+// Read block
+const block = await client.readMifareBlock(0, 4, { key: 'D3F7D3F7D3F7' });
+console.log(block.data); // "01120100000000000000000000000000"
+
+// Write block
+await client.writeMifareBlock(0, 4, {
+  data: '01120100000000000000000000000000',
+  key: 'D3F7D3F7D3F7'
+});
+```
+
+### Authentication Keys
+
+If no key is provided, the agent tries these default keys in order:
+- `FFFFFFFFFFFF` - Default transport key
+- `D3F7D3F7D3F7` - NFC Forum default
+- `A0A1A2A3A4A5` - MAD key
+- `000000000000` - Zero key
+
+### Block Restrictions
+
+- **Sector trailers** (blocks 3, 7, 11, 15, etc.) cannot be read or written - they contain authentication keys
+- Block numbers: 0-63 for MIFARE Classic 1K, 0-255 for MIFARE Classic 4K
+- Each block is 16 bytes (32 hex characters)
 
 ## OpenPrintTag Support
 
