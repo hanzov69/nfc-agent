@@ -1,6 +1,6 @@
 module github.com/SimplyPrint/nfc-agent
 
-go 1.22
+go 1.23.0
 
 require (
 	github.com/ebfe/scard v0.0.0-20241214075232-7af069cabc25
@@ -17,8 +17,10 @@ require (
 	github.com/getlantern/hex v0.0.0-20190417191902-c6586a6fe0b7 // indirect
 	github.com/getlantern/hidden v0.0.0-20190325191715-f02dbb02be55 // indirect
 	github.com/getlantern/ops v0.0.0-20190325191751-d70cb0d6f85f // indirect
+	github.com/getsentry/sentry-go v0.40.0 // indirect
 	github.com/go-stack/stack v1.8.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	github.com/x448/float16 v0.8.4 // indirect
+	golang.org/x/text v0.14.0 // indirect
 )

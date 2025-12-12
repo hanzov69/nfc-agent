@@ -9,7 +9,17 @@ A local HTTP/WebSocket server that enables web applications to communicate with 
 
 ---
 
-Built by [SimplyPrint](https://simplyprint.io) for enabling NFC tag interactions in web-based 3D printing workflows. Designed as a general-purpose NFC gateway that any application can use to read and write NFC cards through a simple API.
+## What is NFC Agent?
+
+NFC Agent is a **local API service** that bridges your NFC reader hardware to applications via HTTP and WebSocket. It doesn't do anything on its own — it's the bridge that lets software communicate with your NFC hardware.
+
+### For SimplyPrint users
+
+**Just install and keep it running!** [SimplyPrint](https://simplyprint.io) will automatically detect and use NFC Agent to read and write filament NFC tags directly from your browser—no additional configuration required. This enables computers that don't normally support NFC (desktops, laptops without built-in NFC) to work with NFC filament tags through a USB reader.
+
+### For developers
+
+NFC Agent provides a fully-featured HTTP/WebSocket API that you can use from any programming language to interact with NFC readers. Read cards, write NDEF data, handle real-time card events, and more. See the [API documentation](#api-overview) and [SDK](#javascript-sdk) below.
 
 ## Features
 
@@ -27,16 +37,20 @@ Built by [SimplyPrint](https://simplyprint.io) for enabling NFC tag interactions
 
 NFC Agent works with any **PC/SC compatible** contactless smart card reader. Tested and recommended:
 
-| Manufacturer | Models |
-|--------------|--------|
-| **ACS** | ACR122U, ACR1252U, ACR1255U-J1 (Bluetooth), ACR1552U |
-| **SCM Microsystems** | SCR3310 |
-| **Identiv** | uTrust series |
-| **HID Global** | OMNIKEY series |
+| Manufacturer | Models | Buy |
+|--------------|--------|-----|
+| **ACS** | ACR122U, ACR1252U, ACR1255U-J1 (Bluetooth), **ACR1552U** | [ACR122U](https://amzn.to/48NzOkF), [ACR1252U](https://amzn.to/48Ne1tb), [ACR1255U-J1](https://amzn.to/3KNB1Aj), [ACR1552U](https://amzn.to/48KvK4v) |
+| **SCM Microsystems** | SCR3310 | — |
+| **Identiv** | uTrust series | — |
+| **HID Global** | OMNIKEY series | — |
+
+> **Recommended: [ACR1552U](https://amzn.to/48KvK4v)** — Supports the widest range of tags including NTAG 424 DNA, which is required for [OpenPrintTag](https://openprinttag.org) filament tags.
+
+<sub>Amazon links are affiliate links.</sub>
 
 ### Supported Card Types
 
-- NTAG (213, 215, 216)
+- NTAG (213, 215, 216, 424 DNA)
 - MIFARE Classic, Ultralight, DESFire
 - ISO 14443 Type A/B
 - FeliCa

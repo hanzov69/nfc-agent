@@ -144,7 +144,7 @@ func TestCORSMiddleware(t *testing.T) {
 				if w.Header().Get("Access-Control-Allow-Origin") != "*" {
 					t.Error("expected Access-Control-Allow-Origin header to be '*'")
 				}
-				if w.Header().Get("Access-Control-Allow-Methods") != "GET, POST, OPTIONS" {
+				if w.Header().Get("Access-Control-Allow-Methods") != "GET, POST, DELETE, OPTIONS" {
 					t.Error("expected Access-Control-Allow-Methods header")
 				}
 				if w.Header().Get("Access-Control-Allow-Headers") != "Content-Type" {

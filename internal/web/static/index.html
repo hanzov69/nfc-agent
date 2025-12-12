@@ -460,6 +460,36 @@
             opacity: 0.5;
             cursor: not-allowed;
         }
+
+        /* Navigation bar */
+        .nav-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 24px;
+            padding: 12px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+        }
+
+        .nav-item {
+            padding: 6px 12px;
+            font-size: 13px;
+            color: var(--text-muted);
+            text-decoration: none;
+            border-radius: 6px;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .nav-item:hover {
+            background: var(--bg);
+            color: var(--text);
+        }
+
+        .card {
+            scroll-margin-top: 16px;
+        }
     </style>
 </head>
 <body>
@@ -469,7 +499,16 @@
             <h1>NFC Agent</h1>
         </header>
 
-        <div class="card">
+        <nav class="nav-bar">
+            <a href="#status" class="nav-item">Status</a>
+            <a href="#settings" class="nav-item">Settings</a>
+            <a href="#readers" class="nav-item">Readers</a>
+            <a href="#test" class="nav-item">Test</a>
+            <a href="#logs" class="nav-item">Logs</a>
+            <a href="#about" class="nav-item">About</a>
+        </nav>
+
+        <div class="card" id="status">
             <div class="card-header">
                 <span class="card-title">Status</span>
                 <span class="status-badge online" id="status-badge">
@@ -493,7 +532,7 @@
             </div>
         </div>
 
-        <div class="card">
+        <div class="card" id="settings">
             <div class="card-header">
                 <span class="card-title">Settings</span>
             </div>
@@ -507,9 +546,19 @@
                     <span class="toggle-slider"></span>
                 </label>
             </div>
+            <div class="toggle-row" style="border-top: 1px solid var(--border); margin-top: 8px; padding-top: 16px;">
+                <div class="toggle-label">
+                    <span class="toggle-label-text">Crash reporting</span>
+                    <span class="toggle-label-desc" id="crash-reporting-status">Loading...</span>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="crash-reporting-toggle" onchange="toggleCrashReporting()" disabled>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
         </div>
 
-        <div class="card">
+        <div class="card" id="readers">
             <div class="card-header">
                 <span class="card-title">Connected Readers</span>
                 <span class="refresh-indicator" id="reader-count">0 readers</span>
@@ -522,7 +571,7 @@
             </ul>
         </div>
 
-        <div class="card">
+        <div class="card" id="test">
             <div class="card-header">
                 <span class="card-title">Test Read/Write</span>
                 <select id="test-reader" style="background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 4px 8px; border-radius: 4px; font-size: 12px;">
@@ -554,7 +603,7 @@
             </div>
         </div>
 
-        <div class="card">
+        <div class="card" id="logs">
             <div class="card-header">
                 <span class="card-title">Logs</span>
                 <div class="log-controls">
@@ -580,6 +629,50 @@
             </div>
             <div class="log-viewer" id="log-viewer">
                 <div class="log-empty">No logs yet</div>
+            </div>
+        </div>
+
+        <div class="card" id="crash-logs-card" style="display: none;">
+            <div class="card-header">
+                <span class="card-title">Crash Reports</span>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <span class="refresh-indicator" id="crash-count">0 reports</span>
+                    <button onclick="reportIssueOnGitHub()" class="test-btn" style="padding: 4px 12px; font-size: 12px; background: #238636;">Report issue on GitHub</button>
+                </div>
+            </div>
+            <div id="crash-logs-content">
+                <div class="log-empty">No crash reports</div>
+            </div>
+        </div>
+
+        <div class="card" id="about">
+            <div class="card-header">
+                <span class="card-title">About NFC Agent</span>
+            </div>
+            <div style="font-size: 14px; line-height: 1.6;">
+                <p style="margin-bottom: 12px;">
+                    NFC Agent is an <strong>API service</strong> that enables applications to interact with NFC readers. It doesn't do anything on its own — it's the bridge that lets software communicate with your NFC hardware.
+                </p>
+                <p style="margin-bottom: 12px; padding: 12px; background: var(--bg); border-radius: 8px;">
+                    <strong>SimplyPrint users:</strong> Just install and keep it running! <a href="https://simplyprint.io" target="_blank" style="color: var(--accent);">SimplyPrint</a> will automatically use it to read and write filament NFC tags from your browser—no additional setup required.
+                </p>
+                <p style="margin-bottom: 12px; color: var(--text-muted); font-size: 13px;">
+                    Developers can use the HTTP/WebSocket API from any programming language.
+                    <a href="https://github.com/SimplyPrint/nfc-agent" target="_blank" style="color: var(--accent);">View source and documentation</a>
+                </p>
+                <p style="margin-bottom: 0; padding: 10px 12px; background: rgba(245, 158, 11, 0.1); border-radius: 8px; font-size: 13px; color: var(--warning);">
+                    <strong>Note:</strong> If your NFC reader emulates a keyboard (types tag data automatically), you don't need NFC Agent — those readers work directly with any text field.
+                </p>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Supported Hardware</span>
+                <span class="refresh-indicator" id="supported-reader-count"></span>
+            </div>
+            <div id="supported-readers-content" style="font-size: 13px;">
+                <div class="empty-state" style="padding: 16px;">Loading...</div>
             </div>
         </div>
 
@@ -942,6 +1035,246 @@
             }
         }
 
+        // Crash reporting functions
+        async function fetchCrashReportingStatus() {
+            try {
+                const res = await fetch('/v1/settings');
+                const data = await res.json();
+
+                const toggle = document.getElementById('crash-reporting-toggle');
+                const status = document.getElementById('crash-reporting-status');
+
+                toggle.checked = data.crashReporting;
+                toggle.disabled = false;
+                status.style.color = '';
+
+                if (data.crashReporting) {
+                    status.textContent = 'Enabled — sent via Sentry to help fix bugs';
+                } else {
+                    status.textContent = 'Disabled — crash reports stay local only';
+                }
+            } catch (error) {
+                console.error('Failed to fetch crash reporting status:', error);
+                document.getElementById('crash-reporting-status').textContent = 'Unable to check status';
+            }
+        }
+
+        async function toggleCrashReporting() {
+            const toggle = document.getElementById('crash-reporting-toggle');
+            const status = document.getElementById('crash-reporting-status');
+            const enabled = toggle.checked;
+
+            toggle.disabled = true;
+            status.textContent = enabled ? 'Enabling...' : 'Disabling...';
+
+            try {
+                const res = await fetch('/v1/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ crashReporting: enabled })
+                });
+                const data = await res.json();
+
+                if (!res.ok) {
+                    throw new Error(data.error || 'Failed to update setting');
+                }
+
+                if (data.crashReporting) {
+                    status.textContent = 'Enabled — restart NFC Agent for changes to take effect';
+                    status.style.color = 'var(--warning)';
+                } else {
+                    status.textContent = 'Disabled — restart NFC Agent for changes to take effect';
+                    status.style.color = 'var(--warning)';
+                }
+            } catch (error) {
+                console.error('Failed to toggle crash reporting:', error);
+                status.textContent = 'Error: ' + error.message;
+                status.style.color = '';
+                // Revert toggle state
+                toggle.checked = !enabled;
+            } finally {
+                toggle.disabled = false;
+            }
+        }
+
+        // Crash logs functions
+        async function fetchCrashLogs() {
+            try {
+                const res = await fetch('/v1/crashes?limit=10');
+                const data = await res.json();
+
+                const card = document.getElementById('crash-logs-card');
+                const content = document.getElementById('crash-logs-content');
+                const count = document.getElementById('crash-count');
+
+                if (!data.crashes || data.crashes.length === 0) {
+                    card.style.display = 'none';
+                    return;
+                }
+
+                card.style.display = 'block';
+                count.textContent = data.crashes.length === 1 ? '1 report' : `${data.crashes.length} reports`;
+
+                content.innerHTML = `
+                    <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+                        Stored locally in: ${escapeHtml(data.crashDir)}
+                    </div>
+                    <div class="crash-list">
+                        ${data.crashes.map(crash => `
+                            <div class="reader-item" style="flex-direction: column; align-items: flex-start; gap: 8px;">
+                                <div style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
+                                    <div>
+                                        <div style="font-weight: 500; font-size: 13px;">${escapeHtml(crash.name)}</div>
+                                        <div style="font-size: 12px; color: var(--text-muted);">${formatDate(crash.modTime)} &middot; ${formatSize(crash.size)}</div>
+                                    </div>
+                                    <button onclick="downloadCrashLog('${escapeHtml(crash.name)}')" class="test-btn" style="padding: 4px 12px; font-size: 12px;">Download</button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Failed to fetch crash logs:', error);
+            }
+        }
+
+        async function downloadCrashLog(filename) {
+            try {
+                const res = await fetch(`/v1/crashes?file=${encodeURIComponent(filename)}`);
+                const data = await res.json();
+
+                if (!res.ok) {
+                    alert(data.error || 'Failed to download crash log');
+                    return;
+                }
+
+                const blob = new Blob([data.content], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            } catch (error) {
+                console.error('Failed to download crash log:', error);
+                alert('Failed to download crash log');
+            }
+        }
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        async function reportIssueOnGitHub() {
+            // Gather system info
+            let version = document.getElementById('version').textContent || 'unknown';
+            let gitCommit = document.getElementById('git-commit').textContent || 'unknown';
+
+            const title = 'Crash report: [Brief description of what happened]';
+            const body = `## Description
+<!-- Describe what you were doing when the crash occurred -->
+
+
+## Environment
+- **NFC Agent Version:** ${version}
+- **Git Commit:** ${gitCommit}
+- **OS:** ${navigator.platform}
+- **Browser (if applicable):** ${navigator.userAgent.split(' ').slice(-2).join(' ')}
+
+## Steps to Reproduce
+<!-- If you can reproduce the crash, list the steps here -->
+1.
+2.
+3.
+
+## Crash Report
+<!--
+IMPORTANT: Please attach the crash report file(s) to this issue!
+
+1. Click the "Download" button next to each crash report in the NFC Agent status page
+2. Drag and drop the downloaded .log file(s) into this text area
+
+The crash report contains technical details that help us fix the bug.
+-->
+
+## Additional Context
+<!-- Add any other relevant information, screenshots, or logs here -->
+
+`;
+
+            const url = `https://github.com/SimplyPrint/nfc-agent/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
+            window.open(url, '_blank');
+        }
+
+        // Supported readers functions
+        const readerBuyLinks = {
+            'ACR122U': 'https://amzn.to/48NzOkF',
+            'ACR1252U': 'https://amzn.to/48Ne1tb',
+            'ACR1255U-J1': 'https://amzn.to/3KNB1Aj',
+            'ACR1552U': 'https://amzn.to/48KvK4v'
+        };
+
+        async function fetchSupportedReaders() {
+            try {
+                const res = await fetch('/v1/supported-readers');
+                const data = await res.json();
+
+                const content = document.getElementById('supported-readers-content');
+                const count = document.getElementById('supported-reader-count');
+
+                if (!data.readers || data.readers.length === 0) {
+                    content.innerHTML = '<div class="empty-state" style="padding: 16px;">No supported readers data available</div>';
+                    return;
+                }
+
+                // Group by manufacturer
+                const byManufacturer = {};
+                data.readers.forEach(r => {
+                    if (!byManufacturer[r.manufacturer]) {
+                        byManufacturer[r.manufacturer] = [];
+                    }
+                    byManufacturer[r.manufacturer].push(r);
+                });
+
+                count.textContent = `${data.readers.length} models`;
+
+                let html = '<div style="color: var(--text-muted); margin-bottom: 12px;">Any <strong style="color: var(--text);">PC/SC compatible</strong> USB NFC reader will work. Tested models:</div>';
+
+                // Recommendation
+                html += '<div style="background: rgba(34, 197, 94, 0.1); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px;">';
+                html += '<div style="font-weight: 500; color: var(--success); margin-bottom: 4px;">Recommended: ACR1552U</div>';
+                html += '<div style="font-size: 12px; color: var(--text-muted);">Supports the widest range of tags including NTAG 424 DNA, required for <a href="https://openprinttag.org" target="_blank" style="color: var(--accent);">OpenPrintTag</a> filament tags. ';
+                html += '<a href="https://amzn.to/48KvK4v" target="_blank" style="color: var(--accent);">Buy on Amazon</a></div>';
+                html += '</div>';
+
+                html += '<div style="display: flex; flex-direction: column; gap: 8px;">';
+
+                for (const [manufacturer, readers] of Object.entries(byManufacturer)) {
+                    html += `<div style="background: var(--bg); border-radius: 8px; padding: 10px 12px;">`;
+                    html += `<div style="font-weight: 500; margin-bottom: 4px;">${escapeHtml(manufacturer)}</div>`;
+                    html += `<div style="color: var(--text-muted); font-size: 12px;">${readers.map(r => {
+                        const link = readerBuyLinks[r.name];
+                        if (link) {
+                            return `<a href="${link}" target="_blank" style="color: var(--accent);">${escapeHtml(r.name)}</a>`;
+                        }
+                        return escapeHtml(r.name);
+                    }).join(', ')}</div>`;
+                    html += `</div>`;
+                }
+
+                html += '</div>';
+                html += '<div style="font-size: 11px; color: var(--text-muted); margin-top: 12px; opacity: 0.7;">Amazon links are affiliate links.</div>';
+                content.innerHTML = html;
+            } catch (error) {
+                console.error('Failed to fetch supported readers:', error);
+                document.getElementById('supported-readers-content').innerHTML = '<div class="empty-state" style="padding: 16px;">Failed to load</div>';
+            }
+        }
+
         // Add event listeners for filter changes
         document.getElementById('log-level').addEventListener('change', fetchLogs);
         document.getElementById('log-category').addEventListener('change', fetchLogs);
@@ -950,6 +1283,9 @@
         fetchData();
         fetchLogs();
         fetchAutostartStatus();
+        fetchCrashReportingStatus();
+        fetchCrashLogs();
+        fetchSupportedReaders();
 
         // Refresh every 5 seconds
         setInterval(fetchData, 5000);

@@ -73,3 +73,20 @@ func PromptAutostart() bool {
 	}
 	return strings.Contains(string(out), "Yes")
 }
+
+const crashReportingPromptMessage = `Help improve NFC Agent by sending anonymous crash reports?
+
+If the app crashes, diagnostic information will be sent to help us fix bugs faster. No personal data is collected.
+
+You can change this later in the status page settings.`
+
+// PromptCrashReporting shows a dialog asking if the user wants to enable crash reporting.
+// Returns true if the user clicked "Yes".
+func PromptCrashReporting() bool {
+	script := `display dialog "` + escapeAppleScript(crashReportingPromptMessage) + `" with title "NFC Agent" buttons {"No", "Yes"} default button 2 with icon note`
+	out, err := exec.Command("osascript", "-e", script).Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), "Yes")
+}

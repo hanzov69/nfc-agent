@@ -17,3 +17,9 @@ func ShowAbout(version string) {
 func PromptAutostart() bool {
 	return false
 }
+
+// PromptCrashReporting is a no-op on Linux (headless service)
+// Crash reporting can be enabled via environment variable or settings file
+func PromptCrashReporting() bool {
+	return false
+}

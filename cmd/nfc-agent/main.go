@@ -7,12 +7,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
+	"time"
 
 	"github.com/SimplyPrint/nfc-agent/internal/api"
 	"github.com/SimplyPrint/nfc-agent/internal/config"
 	"github.com/SimplyPrint/nfc-agent/internal/logging"
 	"github.com/SimplyPrint/nfc-agent/internal/service"
+	"github.com/SimplyPrint/nfc-agent/internal/settings"
 	"github.com/SimplyPrint/nfc-agent/internal/tray"
 	"github.com/SimplyPrint/nfc-agent/internal/welcome"
 )
@@ -87,8 +90,46 @@ func printVersion() {
 }
 
 func run(cfg *config.Config, headless bool) {
+	// Top-level panic recovery - log crash and exit gracefully
+	defer func() {
+		if rec := recover(); rec != nil {
+			stack := debug.Stack()
+
+			// Send to Sentry if enabled
+			logging.CapturePanic(rec, stack, "main")
+
+			// Try to log to crash file
+			crashFile, err := logging.WriteCrashLog(rec, stack)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to write crash log: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "Crash log written to: %s\n", crashFile)
+			}
+
+			// Print to stderr
+			fmt.Fprintf(os.Stderr, "\n=== FATAL PANIC ===\n%v\n\nStack trace:\n%s\n", rec, string(stack))
+
+			// Log to in-memory logger (may not persist but helps if we can recover)
+			logging.Error(logging.CatSystem, fmt.Sprintf("FATAL PANIC: %v", rec), map[string]any{
+				"panic": fmt.Sprintf("%v", rec),
+				"stack": string(stack),
+			})
+
+			os.Exit(1)
+		}
+	}()
+
 	// Initialize logging system
 	logging.Init(1000, logging.LevelDebug)
+
+	// Load user settings
+	userSettings, _ := settings.Load()
+
+	// Initialize Sentry for crash reporting (opt-in via settings or NFC_AGENT_SENTRY=1)
+	if logging.InitSentry(api.Version, userSettings.CrashReporting) {
+		defer logging.FlushSentry(2 * time.Second)
+	}
+
 	logging.Info(logging.CatSystem, "NFC Agent starting", map[string]any{
 		"version": api.Version,
 	})
@@ -125,7 +166,7 @@ func run(cfg *config.Config, headless bool) {
 	if useTray {
 		log.Println("Starting with system tray...")
 
-		// Show welcome popup and auto-start prompt on first run
+		// Show welcome popup and prompts on first run
 		if welcome.IsFirstRun() {
 			go func() {
 				welcome.ShowWelcome()
@@ -140,6 +181,15 @@ func run(cfg *config.Config, headless bool) {
 						} else {
 							log.Println("Auto-start enabled")
 						}
+					}
+				}
+
+				// Prompt for crash reporting
+				if welcome.PromptCrashReporting() {
+					if err := settings.SetCrashReporting(true); err != nil {
+						log.Printf("Failed to save crash reporting setting: %v", err)
+					} else {
+						log.Println("Crash reporting enabled")
 					}
 				}
 

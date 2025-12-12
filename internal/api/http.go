@@ -4,7 +4,10 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 
@@ -13,15 +16,52 @@ import (
 	"github.com/SimplyPrint/nfc-agent/internal/logging"
 	"github.com/SimplyPrint/nfc-agent/internal/openprinttag"
 	"github.com/SimplyPrint/nfc-agent/internal/service"
+	"github.com/SimplyPrint/nfc-agent/internal/settings"
 	"github.com/SimplyPrint/nfc-agent/internal/web"
 )
 
-// Version information
+// Version information (set via ldflags in production builds)
 var (
-	Version   = "1.0.0"
-	BuildTime = "unknown"
-	GitCommit = "unknown"
+	Version   = ""
+	BuildTime = ""
+	GitCommit = ""
 )
+
+func init() {
+	// If version wasn't set via ldflags, this is a dev build
+	// Try to get VCS info from Go's build info
+	if Version == "" {
+		Version = "dev"
+		if info, ok := debug.ReadBuildInfo(); ok {
+			var vcsRevision, vcsTime string
+			var vcsModified bool
+			for _, setting := range info.Settings {
+				switch setting.Key {
+				case "vcs.revision":
+					vcsRevision = setting.Value
+				case "vcs.time":
+					vcsTime = setting.Value
+				case "vcs.modified":
+					vcsModified = setting.Value == "true"
+				}
+			}
+			if vcsRevision != "" {
+				shortCommit := vcsRevision
+				if len(shortCommit) > 7 {
+					shortCommit = shortCommit[:7]
+				}
+				GitCommit = vcsRevision
+				Version = "dev-" + shortCommit
+				if vcsModified {
+					Version += "-dirty"
+				}
+			}
+			if vcsTime != "" {
+				BuildTime = vcsTime
+			}
+		}
+	}
+}
 
 // shutdownHandler is called when a shutdown is requested via API
 var shutdownHandler func()
@@ -45,16 +85,60 @@ func NewMux() *http.ServeMux {
 	mux.HandleFunc("/v1/version", corsMiddleware(handleVersion))
 	mux.HandleFunc("/v1/health", corsMiddleware(handleHealth))
 	mux.HandleFunc("/v1/logs", corsMiddleware(handleLogs))
+	mux.HandleFunc("/v1/crashes", corsMiddleware(handleCrashes))
+	mux.HandleFunc("/v1/settings", corsMiddleware(handleSettings))
 	mux.HandleFunc("/v1/shutdown", corsMiddleware(handleShutdown))
 	mux.HandleFunc("/v1/autostart", corsMiddleware(handleAutostart))
 	return mux
+}
+
+// recoveryMiddleware catches panics and logs them to crash files.
+func recoveryMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				stack := debug.Stack()
+				context := fmt.Sprintf("HTTP %s %s", r.Method, r.URL.Path)
+
+				// Send to Sentry if enabled
+				logging.CapturePanic(rec, stack, context)
+
+				// Log to in-memory logger
+				logging.Error(logging.CatHTTP, fmt.Sprintf("PANIC in %s: %v", context, rec), map[string]any{
+					"panic":  fmt.Sprintf("%v", rec),
+					"stack":  string(stack),
+					"method": r.Method,
+					"path":   r.URL.Path,
+				})
+
+				// Write crash log to file
+				crashFile, err := logging.WriteCrashLog(rec, stack)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to write crash log: %v\n", err)
+					crashFile = ""
+				}
+
+				// Print to stderr
+				fmt.Fprintf(os.Stderr, "\n=== PANIC in %s ===\n%v\n\nStack trace:\n%s\n", context, rec, string(stack))
+
+				// Send 500 response
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"error":     "internal server error",
+					"crashFile": crashFile,
+				})
+			}
+		}()
+		next(w, r)
+	}
 }
 
 // corsMiddleware adds CORS headers to allow browser access from any origin.
 func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
 		// Handle preflight requests
@@ -63,7 +147,8 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		next(w, r)
+		// Wrap with recovery middleware
+		recoveryMiddleware(next)(w, r)
 	}
 }
 
@@ -657,3 +742,95 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 	}
 }
+
+func handleCrashes(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		query := r.URL.Query()
+
+		// Check if requesting a specific crash log
+		filename := query.Get("file")
+		if filename != "" {
+			content, err := logging.ReadCrashLog(filename)
+			if err != nil {
+				respondJSON(w, http.StatusNotFound, map[string]string{
+					"error": "crash log not found: " + err.Error(),
+				})
+				return
+			}
+			respondJSON(w, http.StatusOK, map[string]interface{}{
+				"filename": filename,
+				"content":  content,
+			})
+			return
+		}
+
+		// List crash logs
+		limit := 20
+		if limitStr := query.Get("limit"); limitStr != "" {
+			if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+				limit = l
+				if limit > 100 {
+					limit = 100
+				}
+			}
+		}
+
+		logs, err := logging.GetCrashLogs(limit)
+		if err != nil {
+			respondJSON(w, http.StatusInternalServerError, map[string]string{
+				"error": "failed to list crash logs: " + err.Error(),
+			})
+			return
+		}
+
+		respondJSON(w, http.StatusOK, map[string]interface{}{
+			"crashes":  logs,
+			"crashDir": logging.CrashLogDir(),
+		})
+
+	default:
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
+}
+
+// handleSettings handles GET and POST requests for user settings.
+func handleSettings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s := settings.Get()
+		respondJSON(w, http.StatusOK, map[string]interface{}{
+			"crashReporting": s.CrashReporting,
+		})
+
+	case http.MethodPost:
+		var req struct {
+			CrashReporting *bool `json:"crashReporting"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respondJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "invalid request body: " + err.Error(),
+			})
+			return
+		}
+
+		if req.CrashReporting != nil {
+			if err := settings.SetCrashReporting(*req.CrashReporting); err != nil {
+				respondJSON(w, http.StatusInternalServerError, map[string]string{
+					"error": "failed to save settings: " + err.Error(),
+				})
+				return
+			}
+		}
+
+		s := settings.Get()
+		respondJSON(w, http.StatusOK, map[string]interface{}{
+			"crashReporting": s.CrashReporting,
+			"message":        "Settings updated. Restart may be required for some changes to take effect.",
+		})
+
+	default:
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+	}
+}
+

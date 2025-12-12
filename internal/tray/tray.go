@@ -57,7 +57,12 @@ func (t *TrayApp) onReady() {
 	systray.SetTooltip("NFC Agent")
 
 	// Version header (disabled, just for display)
-	mVersion := systray.AddMenuItem(fmt.Sprintf("NFC Agent v%s", api.Version), "")
+	// Only add "v" prefix for proper version numbers (e.g., "1.2.3"), not for dev builds
+	versionStr := api.Version
+	if len(versionStr) > 0 && versionStr[0] >= '0' && versionStr[0] <= '9' {
+		versionStr = "v" + versionStr
+	}
+	mVersion := systray.AddMenuItem(fmt.Sprintf("NFC Agent %s", versionStr), "")
 	mVersion.Disable()
 
 	systray.AddSeparator()

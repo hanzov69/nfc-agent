@@ -84,3 +84,23 @@ func PromptAutostart() bool {
 	)
 	return ret == IDYES
 }
+
+const crashReportingPromptMessage = `Help improve NFC Agent by sending anonymous crash reports?
+
+If the app crashes, diagnostic information will be sent to help us fix bugs faster. No personal data is collected.
+
+You can change this later in the status page settings.`
+
+// PromptCrashReporting shows a dialog asking if the user wants to enable crash reporting.
+// Returns true if the user clicked "Yes".
+func PromptCrashReporting() bool {
+	titlePtr, _ := syscall.UTF16PtrFromString("NFC Agent")
+	messagePtr, _ := syscall.UTF16PtrFromString(crashReportingPromptMessage)
+	ret, _, _ := procMessageBoxW.Call(
+		0,
+		uintptr(unsafe.Pointer(messagePtr)),
+		uintptr(unsafe.Pointer(titlePtr)),
+		uintptr(MB_YESNO|MB_ICONQUESTION),
+	)
+	return ret == IDYES
+}

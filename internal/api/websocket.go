@@ -61,6 +61,9 @@ func NewWSHub() *WSHub {
 
 // Run starts the hub's main loop
 func (h *WSHub) Run() {
+	// Re-panic after logging since hub crash is fatal
+	defer logging.RecoverAndLog("WebSocket hub", true)
+
 	for {
 		select {
 		case client := <-h.register:
@@ -128,6 +131,9 @@ func InitWebSocket() http.HandlerFunc {
 }
 
 func (c *WSClient) readPump() {
+	// Recover from panics (runs last due to LIFO)
+	defer logging.RecoverAndLog("WebSocket readPump", false)
+	// Cleanup (runs first)
 	defer func() {
 		// Stop all polling
 		c.mu.Lock()
@@ -172,6 +178,9 @@ func (c *WSClient) readPump() {
 
 func (c *WSClient) writePump() {
 	ticker := time.NewTicker(54 * time.Second)
+	// Recover from panics (runs last due to LIFO)
+	defer logging.RecoverAndLog("WebSocket writePump", false)
+	// Cleanup (runs first)
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()
@@ -539,6 +548,8 @@ func (c *WSClient) handleSubscribe(id string, payload json.RawMessage) {
 
 	// Start polling goroutine
 	go func() {
+		defer logging.RecoverAndLog("WebSocket poll goroutine", false)
+
 		for range ticker.C {
 			c.mu.Lock()
 			if !c.subscribed[readerKey] {
