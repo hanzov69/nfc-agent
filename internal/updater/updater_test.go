@@ -167,6 +167,35 @@ func TestTruncateReleaseNotes(t *testing.T) {
 	}
 }
 
+func TestNFCAgentReleasePattern(t *testing.T) {
+	tests := []struct {
+		tag     string
+		matches bool
+	}{
+		{"v0.2.3", true},
+		{"v1.0.0", true},
+		{"v10.20.30", true},
+		{"sdk-v0.2.0", false},        // SDK release
+		{"python-sdk-v1.0.0", false}, // Future Python SDK
+		{"go-sdk-v2.0.0", false},     // Future Go SDK
+		{"", false},
+		{"1.0.0", false},   // Missing v prefix
+		{"vX.Y.Z", false},  // Invalid version
+		{"v1", false},      // Incomplete version
+		{"v1.2", false},    // Incomplete version
+		{"release-v1.0.0", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tag, func(t *testing.T) {
+			got := nfcAgentReleasePattern.MatchString(tt.tag)
+			if got != tt.matches {
+				t.Errorf("nfcAgentReleasePattern.MatchString(%q) = %v, want %v", tt.tag, got, tt.matches)
+			}
+		})
+	}
+}
+
 func TestUpdateInfoFields(t *testing.T) {
 	// Test that UpdateInfo struct serializes correctly
 	info := UpdateInfo{

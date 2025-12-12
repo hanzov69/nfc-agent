@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -11,8 +12,8 @@ import (
 )
 
 const (
-	// GitHubAPIURL is the endpoint for fetching the latest release
-	GitHubAPIURL = "https://api.github.com/repos/SimplyPrint/nfc-agent/releases/latest"
+	// GitHubReleasesURL is the endpoint for fetching releases
+	GitHubReleasesURL = "https://api.github.com/repos/SimplyPrint/nfc-agent/releases?per_page=20"
 	// CacheDuration defines how long to cache update check results
 	CacheDuration = 30 * time.Minute
 	// RequestTimeout is the timeout for GitHub API requests
@@ -22,6 +23,9 @@ const (
 	// MaxReleaseNotesLength is the maximum length of release notes to return
 	MaxReleaseNotesLength = 500
 )
+
+// nfcAgentReleasePattern matches NFC Agent release tags (v1.2.3) but not SDK releases (sdk-v1.2.3)
+var nfcAgentReleasePattern = regexp.MustCompile(`^v\d+\.\d+\.\d+`)
 
 // GitHubRelease represents the GitHub API response for a release
 type GitHubRelease struct {
@@ -107,7 +111,7 @@ func (c *Checker) checkGitHub() *UpdateInfo {
 		IsDev:          ParseVersion(c.currentVersion).IsDev(),
 	}
 
-	req, err := http.NewRequest(http.MethodGet, GitHubAPIURL, nil)
+	req, err := http.NewRequest(http.MethodGet, GitHubReleasesURL, nil)
 	if err != nil {
 		info.Error = fmt.Sprintf("failed to create request: %v", err)
 		return info
@@ -139,9 +143,24 @@ func (c *Checker) checkGitHub() *UpdateInfo {
 		return info
 	}
 
-	var release GitHubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+	var releases []GitHubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
 		info.Error = fmt.Sprintf("failed to parse release info: %v", err)
+		return info
+	}
+
+	// Find the latest NFC Agent release (tags starting with "v" followed by version number)
+	// This filters out SDK releases (sdk-v*) and any other prefixed releases
+	var release *GitHubRelease
+	for i := range releases {
+		if nfcAgentReleasePattern.MatchString(releases[i].TagName) {
+			release = &releases[i]
+			break // Releases are sorted by creation date, first match is latest
+		}
+	}
+
+	if release == nil {
+		info.Error = "no NFC Agent releases found"
 		return info
 	}
 
