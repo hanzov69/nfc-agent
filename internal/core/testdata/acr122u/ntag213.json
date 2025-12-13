@@ -1,0 +1,13 @@
+{
+  "reader": "ACS ACR122U PICC Interface",
+  "reader_id": "acr122u",
+  "tag_type": "NTAG213",
+  "uid": "0458478a837280",
+  "atr": "3b8f8001804f0ca0000003060300030000000068",
+  "protocol": "NFC-A",
+  "protocol_iso": "ISO 14443-3A",
+  "responses": {},
+  "detected_type": "NTAG213",
+  "detected_size": 180,
+  "captured_at": "2025-12-13T19:29:58.913700"
+}

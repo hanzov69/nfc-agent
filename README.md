@@ -318,6 +318,8 @@ When reading a card with OpenPrintTag data (MIME type `application/vnd.openprint
 {
   "uid": "04:A2:B3:C4:D5:E6:07",
   "type": "NTAG215",
+  "protocol": "NFC-A",
+  "protocolISO": "ISO 14443-3A",
   "dataType": "openprinttag",
   "data": {
     "materialName": "PLA Galaxy Black",

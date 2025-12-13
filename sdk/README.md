@@ -139,7 +139,9 @@ await ws.subscribe(0);
 ws.on('card_detected', (event) => {
   console.log('Reader:', event.reader);
   console.log('Card UID:', event.card.uid);
-  console.log('Card Type:', event.card.type);
+  console.log('Card Type:', event.card.type);         // e.g., "NTAG213"
+  console.log('Protocol:', event.card.protocol);      // e.g., "NFC-A"
+  console.log('Protocol ISO:', event.card.protocolISO); // e.g., "ISO 14443-3A"
   console.log('Card Data:', event.card.data);
 });
 
@@ -344,7 +346,9 @@ interface Reader {
 interface Card {
   uid: string;
   atr?: string;
-  type?: string;
+  type?: string;           // e.g., "NTAG213", "MIFARE Classic", "ICode SLIX"
+  protocol?: string;       // Short: "NFC-A", "NFC-V"
+  protocolISO?: string;    // Full: "ISO 14443-3A", "ISO 15693"
   size?: number;
   writable?: boolean;
   data?: string;

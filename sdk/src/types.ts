@@ -23,8 +23,12 @@ export interface Card {
   uid: string;
   /** Answer To Reset (hex encoded) */
   atr?: string;
-  /** Card type (e.g., "NTAG213", "NTAG215", "MIFARE Classic") */
+  /** Card type (e.g., "NTAG213", "NTAG215", "MIFARE Classic", "ICode SLIX") */
   type?: string;
+  /** Short protocol name (e.g., "NFC-A", "NFC-V") */
+  protocol?: string;
+  /** Full ISO protocol name (e.g., "ISO 14443-3A", "ISO 15693") */
+  protocolISO?: string;
   /** Memory size in bytes */
   size?: number;
   /** Whether the card can be written to */

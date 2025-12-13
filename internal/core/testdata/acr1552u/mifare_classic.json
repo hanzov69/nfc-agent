@@ -1,0 +1,22 @@
+{
+  "reader": "ACS ACR1552 1S CL Reader PICC",
+  "reader_id": "acr1552u",
+  "tag_type": "MIFARE Classic",
+  "uid": "10ba8139",
+  "atr": "3b8f8001804f0ca000000306030001000000006a",
+  "protocol": "NFC-A",
+  "protocol_iso": "ISO 14443-3A",
+  "responses": {
+    "get_uid": "6a81",
+    "transparent_start": "c0030090009000",
+    "transparent_protocol": "c0030090008f01089000",
+    "transparent_get_version": "c0030164019000",
+    "get_version_1a": "6900",
+    "get_version_1b": "6900",
+    "cc_page1": "6a81",
+    "cc_page3": "6a81"
+  },
+  "detected_type": "MIFARE Classic",
+  "detected_size": 1024,
+  "captured_at": "2025-12-13T19:28:53.470963"
+}

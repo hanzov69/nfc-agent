@@ -14,14 +14,16 @@ import (
 
 // Card represents an NFC card/tag.
 type Card struct {
-	UID      string `json:"uid"`
-	ATR      string `json:"atr,omitempty"`
-	Type     string `json:"type,omitempty"`     // e.g., "NTAG213", "NTAG215", "NTAG216", "MIFARE Classic"
-	Size     int    `json:"size,omitempty"`     // Memory size in bytes
-	Writable bool   `json:"writable,omitempty"` // Whether the tag is writable
-	URL      string `json:"url,omitempty"`      // URL from first NDEF record (if URI record)
-	Data     string `json:"data,omitempty"`     // NDEF data read from the tag (if available)
-	DataType string `json:"dataType,omitempty"` // Type of data: "text", "json", "binary", or "unknown"
+	UID         string `json:"uid"`
+	ATR         string `json:"atr,omitempty"`
+	Type        string `json:"type,omitempty"`        // e.g., "NTAG213", "NTAG215", "NTAG216", "MIFARE Classic"
+	Protocol    string `json:"protocol,omitempty"`    // Short protocol: "NFC-A", "NFC-V"
+	ProtocolISO string `json:"protocolISO,omitempty"` // Full ISO protocol: "ISO 14443-3A", "ISO 15693"
+	Size        int    `json:"size,omitempty"`        // Memory size in bytes
+	Writable    bool   `json:"writable,omitempty"`    // Whether the tag is writable
+	URL         string `json:"url,omitempty"`         // URL from first NDEF record (if URI record)
+	Data        string `json:"data,omitempty"`        // NDEF data read from the tag (if available)
+	DataType    string `json:"dataType,omitempty"`    // Type of data: "text", "json", "binary", or "unknown"
 }
 
 // GetCardUID connects to the specified reader and attempts to read the card UID.
@@ -86,30 +88,224 @@ func GetCardUID(readerName string) (*Card, error) {
 
 // detectCardType attempts to determine the card type (NTAG213/215/216, MIFARE, etc.)
 func detectCardType(card *scard.Card, cardInfo *Card) {
-	// Method 1a: Try GET_VERSION (works on ACR1552U)
+	// Log the final detection result when function returns
+	defer func() {
+		logging.Debug(logging.CatCard, "Card type detection complete", map[string]any{
+			"uid":         cardInfo.UID,
+			"type":        cardInfo.Type,
+			"size":        cardInfo.Size,
+			"atr":         cardInfo.ATR,
+			"protocol":    cardInfo.Protocol,
+			"protocolISO": cardInfo.ProtocolISO,
+		})
+	}()
+
+	// Detect protocol from ATR patterns (set early, before type detection)
+	atr := cardInfo.ATR
+	if len(atr) >= 30 && (atr[0:4] == "3b8f" || atr[0:4] == "3b8b") {
+		if contains(atr, "03060b") {
+			// ISO 15693 (NFC-V) - ICode SLI/SLIX/SLIX2
+			cardInfo.Protocol = "NFC-V"
+			cardInfo.ProtocolISO = "ISO 15693"
+		} else if contains(atr, "03060300") {
+			// ISO 14443-3A (NFC-A) - NTAG, MIFARE Classic, MIFARE Ultralight
+			cardInfo.Protocol = "NFC-A"
+			cardInfo.ProtocolISO = "ISO 14443-3A"
+		}
+	}
+
+	// Track if GET_VERSION ever succeeded - important for trusting CC-based detection later.
+	// All NXP NTAG21x and Ultralight EV1 support GET_VERSION.
+	// Plain MIFARE Ultralight does NOT support GET_VERSION.
+	getVersionSucceeded := false
+
+	// Track if CC detection found valid NDEF - used to gate ATR-based fallback detection.
+	ccDetectionFoundNDEF := false
+
+	// Method 0: Try GET_VERSION via Transparent Exchange (ACR1552 specific)
+	// This uses the PC/SC 2.0 Part 3 Transparent Exchange command sequence
+	// Reference: https://community.nxp.com/t5/NFC/NFC-NTAG213-READ-SIG-Originality-Signature-Verification-Using/m-p/1890732
+	startSession := []byte{0xFF, 0xC2, 0x00, 0x00, 0x02, 0x81, 0x00}
+	setProtocol := []byte{0xFF, 0xC2, 0x00, 0x02, 0x04, 0x8F, 0x02, 0x00, 0x03}
+	getVersionTransparent := []byte{0xFF, 0xC2, 0x00, 0x01, 0x03, 0x95, 0x01, 0x60}
+	endSession := []byte{0xFF, 0xC2, 0x00, 0x00, 0x02, 0x82, 0x00}
+
+	// Start transparent session
+	rsp, err := card.Transmit(startSession)
+	if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+		// Set protocol to ISO 14443-A Layer 3
+		rsp, err = card.Transmit(setProtocol)
+		if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+			// Send GET_VERSION command
+			rsp, err = card.Transmit(getVersionTransparent)
+
+			logging.Debug(logging.CatCard, "GET_VERSION response", map[string]any{
+				"method":   "0-transparent",
+				"response": hex.EncodeToString(rsp),
+			})
+
+			// Parse response - TLV format with tag 0x97 containing the version data
+			// Example: c0030090009201009602000097080004040201000f039000
+			// We need to find tag 0x97 which contains the 8-byte version response
+			var versionData []byte
+			for i := 0; i < len(rsp)-2; i++ {
+				if rsp[i] == 0x97 { // Version data tag
+					tagLen := int(rsp[i+1])
+					if i+2+tagLen <= len(rsp) && tagLen >= 7 {
+						versionData = rsp[i+2 : i+2+tagLen]
+						break
+					}
+				}
+			}
+
+			if len(versionData) >= 7 {
+				// Version data: [header, vendor, productType, subtype, major, minor, storage, protocol]
+				// Validate header bytes - plain MIFARE Ultralight doesn't support GET_VERSION
+				// and may return garbage data. Valid responses have:
+				// - Byte 0: 0x00 (fixed header)
+				// - Byte 1: 0x04 (NXP vendor ID)
+				header := versionData[0]
+				vendor := versionData[1]
+				productType := versionData[2]
+				storageSize := versionData[6]
+
+				logging.Debug(logging.CatCard, "Transparent GET_VERSION parsed", map[string]any{
+					"versionData": hex.EncodeToString(versionData),
+					"header":      fmt.Sprintf("0x%02x", header),
+					"vendor":      fmt.Sprintf("0x%02x", vendor),
+					"productType": fmt.Sprintf("0x%02x", productType),
+					"storageSize": fmt.Sprintf("0x%02x", storageSize),
+				})
+
+				// Only trust version data if header byte is 0x00 (fixed GET_VERSION identifier)
+				// Tags that don't support GET_VERSION may return garbage with random header
+				// Note: vendor byte varies (0x04=NXP, but some compatible tags use other values)
+				if header != 0x00 {
+					logging.Debug(logging.CatCard, "Invalid GET_VERSION header, ignoring response", map[string]any{
+						"expected_header": "0x00",
+						"got_header":      fmt.Sprintf("0x%02x", header),
+					})
+					// Fall through to other detection methods
+					card.Transmit(endSession)
+				} else if productType == 0x04 { // NTAG family
+					getVersionSucceeded = true
+					card.Transmit(endSession) // Clean up session
+					switch storageSize {
+					case 0x0F: // NTAG213
+						cardInfo.Type = "NTAG213"
+						cardInfo.Size = 180
+						cardInfo.Writable = true
+						return
+					case 0x11: // NTAG215
+						cardInfo.Type = "NTAG215"
+						cardInfo.Size = 504
+						cardInfo.Writable = true
+						return
+					case 0x13: // NTAG216
+						cardInfo.Type = "NTAG216"
+						cardInfo.Size = 888
+						cardInfo.Writable = true
+						return
+					}
+				} else if productType == 0x03 { // MIFARE Ultralight family
+					getVersionSucceeded = true
+					card.Transmit(endSession) // Clean up session
+					switch storageSize {
+					case 0x0B: // Ultralight EV1 MF0UL11 (48 bytes)
+						cardInfo.Type = "MIFARE Ultralight EV1"
+						cardInfo.Size = 48
+						cardInfo.Writable = true
+						return
+					case 0x0E: // Ultralight EV1 MF0UL21 (128 bytes)
+						cardInfo.Type = "MIFARE Ultralight EV1"
+						cardInfo.Size = 128
+						cardInfo.Writable = true
+						return
+					default: // Unknown Ultralight variant
+						cardInfo.Type = "MIFARE Ultralight"
+						cardInfo.Size = 64
+						cardInfo.Writable = true
+						return
+					}
+				}
+			}
+		}
+		// End session (even if commands failed)
+		card.Transmit(endSession)
+	}
+
+	// Method 1a: Try GET_VERSION with standard PC/SC passthrough
 	getVersionCmd := []byte{0xFF, 0x00, 0x00, 0x00, 0x02, 0x60, 0x00}
-	rsp, err := card.Transmit(getVersionCmd)
+	rsp, err = card.Transmit(getVersionCmd)
+
+	// Log GET_VERSION response for diagnostics
+	if err == nil && len(rsp) >= 2 {
+		logging.Debug(logging.CatCard, "GET_VERSION response", map[string]any{
+			"method":   "1a",
+			"response": hex.EncodeToString(rsp),
+			"status":   fmt.Sprintf("%02x%02x", rsp[len(rsp)-2], rsp[len(rsp)-1]),
+		})
+	}
 
 	if err == nil && len(rsp) >= 10 && rsp[len(rsp)-2] == 0x90 && rsp[len(rsp)-1] == 0x00 {
-		// Parse version response (8 bytes + status)
+		// Parse version response: [header, vendor, productType, subtype, major, minor, storage, protocol, SW1, SW2]
+		// Validate header byte (0x00) - tags that don't support GET_VERSION may return garbage with status 9000
+		header := rsp[0]
+		productType := rsp[2]
 		storageSize := rsp[6]
 
-		switch storageSize {
-		case 0x0F: // NTAG213
-			cardInfo.Type = "NTAG213"
-			cardInfo.Size = 180
-			cardInfo.Writable = true
-			return
-		case 0x11: // NTAG215
-			cardInfo.Type = "NTAG215"
-			cardInfo.Size = 504
-			cardInfo.Writable = true
-			return
-		case 0x13: // NTAG216
-			cardInfo.Type = "NTAG216"
-			cardInfo.Size = 888
-			cardInfo.Writable = true
-			return
+		logging.Debug(logging.CatCard, "GET_VERSION parsed (Method 1a)", map[string]any{
+			"header":      fmt.Sprintf("0x%02x", header),
+			"productType": fmt.Sprintf("0x%02x", productType),
+			"storageSize": fmt.Sprintf("0x%02x", storageSize),
+		})
+
+		if header != 0x00 {
+			logging.Debug(logging.CatCard, "Invalid GET_VERSION header (Method 1a), ignoring", map[string]any{
+				"expected": "0x00",
+				"got":      fmt.Sprintf("0x%02x", header),
+			})
+			// Fall through to Method 1b
+		} else {
+			getVersionSucceeded = true
+
+			if productType == 0x04 { // NTAG family
+				switch storageSize {
+				case 0x0F: // NTAG213
+					cardInfo.Type = "NTAG213"
+					cardInfo.Size = 180
+					cardInfo.Writable = true
+					return
+				case 0x11: // NTAG215
+					cardInfo.Type = "NTAG215"
+					cardInfo.Size = 504
+					cardInfo.Writable = true
+					return
+				case 0x13: // NTAG216
+					cardInfo.Type = "NTAG216"
+					cardInfo.Size = 888
+					cardInfo.Writable = true
+					return
+				}
+			} else if productType == 0x03 { // MIFARE Ultralight family
+				switch storageSize {
+				case 0x0B: // Ultralight EV1 MF0UL11 (48 bytes)
+					cardInfo.Type = "MIFARE Ultralight EV1"
+					cardInfo.Size = 48
+					cardInfo.Writable = true
+					return
+				case 0x0E: // Ultralight EV1 MF0UL21 (128 bytes)
+					cardInfo.Type = "MIFARE Ultralight EV1"
+					cardInfo.Size = 128
+					cardInfo.Writable = true
+					return
+				default: // Unknown Ultralight variant
+					cardInfo.Type = "MIFARE Ultralight"
+					cardInfo.Size = 64
+					cardInfo.Writable = true
+					return
+				}
+			}
 		}
 	}
 
@@ -122,26 +318,74 @@ func detectCardType(card *scard.Card, cardInfo *Card) {
 	getVersionCmd2 := []byte{0xFF, 0x00, 0x00, 0x00, 0x01, 0x60}
 	rsp, err = card.Transmit(getVersionCmd2)
 
+	// Log Method 1b response
+	if err == nil && len(rsp) >= 2 {
+		logging.Debug(logging.CatCard, "GET_VERSION response", map[string]any{
+			"method":   "1b",
+			"response": hex.EncodeToString(rsp),
+			"status":   fmt.Sprintf("%02x%02x", rsp[len(rsp)-2], rsp[len(rsp)-1]),
+		})
+	}
+
 	if err == nil && len(rsp) >= 10 && rsp[len(rsp)-2] == 0x90 && rsp[len(rsp)-1] == 0x00 {
-		// Parse version response (8 bytes + status)
+		// Parse version response: [header, vendor, productType, subtype, major, minor, storage, protocol, SW1, SW2]
+		// Validate header byte (0x00) - tags that don't support GET_VERSION may return garbage with status 9000
+		header := rsp[0]
+		productType := rsp[2]
 		storageSize := rsp[6]
 
-		switch storageSize {
-		case 0x0F: // NTAG213
-			cardInfo.Type = "NTAG213"
-			cardInfo.Size = 180
-			cardInfo.Writable = true
-			return
-		case 0x11: // NTAG215
-			cardInfo.Type = "NTAG215"
-			cardInfo.Size = 504
-			cardInfo.Writable = true
-			return
-		case 0x13: // NTAG216
-			cardInfo.Type = "NTAG216"
-			cardInfo.Size = 888
-			cardInfo.Writable = true
-			return
+		logging.Debug(logging.CatCard, "GET_VERSION parsed (Method 1b)", map[string]any{
+			"header":      fmt.Sprintf("0x%02x", header),
+			"productType": fmt.Sprintf("0x%02x", productType),
+			"storageSize": fmt.Sprintf("0x%02x", storageSize),
+		})
+
+		if header != 0x00 {
+			logging.Debug(logging.CatCard, "Invalid GET_VERSION header (Method 1b), ignoring", map[string]any{
+				"expected": "0x00",
+				"got":      fmt.Sprintf("0x%02x", header),
+			})
+			// Fall through to CC-based detection
+		} else {
+			getVersionSucceeded = true
+
+			if productType == 0x04 { // NTAG family
+				switch storageSize {
+				case 0x0F: // NTAG213
+					cardInfo.Type = "NTAG213"
+					cardInfo.Size = 180
+					cardInfo.Writable = true
+					return
+				case 0x11: // NTAG215
+					cardInfo.Type = "NTAG215"
+					cardInfo.Size = 504
+					cardInfo.Writable = true
+					return
+				case 0x13: // NTAG216
+					cardInfo.Type = "NTAG216"
+					cardInfo.Size = 888
+					cardInfo.Writable = true
+					return
+				}
+			} else if productType == 0x03 { // MIFARE Ultralight family
+				switch storageSize {
+				case 0x0B: // Ultralight EV1 MF0UL11 (48 bytes)
+					cardInfo.Type = "MIFARE Ultralight EV1"
+					cardInfo.Size = 48
+					cardInfo.Writable = true
+					return
+				case 0x0E: // Ultralight EV1 MF0UL21 (128 bytes)
+					cardInfo.Type = "MIFARE Ultralight EV1"
+					cardInfo.Size = 128
+					cardInfo.Writable = true
+					return
+				default: // Unknown Ultralight variant
+					cardInfo.Type = "MIFARE Ultralight"
+					cardInfo.Size = 64
+					cardInfo.Writable = true
+					return
+				}
+			}
 		}
 	}
 
@@ -152,24 +396,56 @@ func detectCardType(card *scard.Card, cardInfo *Card) {
 
 	if err == nil && len(rsp) >= 12 && rsp[len(rsp)-2] == 0x90 {
 		// CC is at bytes 8-11 (page 3 within the 4-page read)
-		// Byte 10 (index 10 in response) indicates memory size
-		if len(rsp) >= 11 {
+		// CC byte 0 (index 8): NDEF magic (must be 0xE1 for valid NDEF)
+		// CC byte 2 (index 10): Memory size indicator
+		logging.Debug(logging.CatCard, "CC read (Method 2a)", map[string]any{
+			"response":  hex.EncodeToString(rsp),
+			"cc_bytes":  hex.EncodeToString(rsp[8:12]),
+			"cc_magic":  fmt.Sprintf("0x%02x", rsp[8]),
+			"cc_size":   fmt.Sprintf("0x%02x", rsp[10]),
+		})
+		if len(rsp) >= 11 && rsp[8] == 0xE1 { // Validate NDEF magic byte
+			ccDetectionFoundNDEF = true
 			ccSize := rsp[10]
 
+			// IMPORTANT: For NTAG detection, we require GET_VERSION to have succeeded.
+			// All NXP NTAG21x tags support GET_VERSION. Plain MIFARE Ultralight does NOT.
+			// If GET_VERSION failed but CC size suggests NTAG, it's likely plain Ultralight
+			// with non-standard CC (formatted with more capacity than it has).
 			switch ccSize {
-			case 0x12: // 144 bytes -> NTAG213
-				cardInfo.Type = "NTAG213"
-				cardInfo.Size = 180
+			case 0x06: // 48 bytes -> MIFARE Ultralight
+				cardInfo.Type = "MIFARE Ultralight"
+				cardInfo.Size = 48
 				cardInfo.Writable = true
 				return
-			case 0x3E: // 496 bytes -> NTAG215
-				cardInfo.Type = "NTAG215"
-				cardInfo.Size = 504
+			case 0x12: // 144 bytes -> NTAG213 (requires GET_VERSION confirmation)
+				if getVersionSucceeded {
+					cardInfo.Type = "NTAG213"
+					cardInfo.Size = 180
+				} else {
+					cardInfo.Type = "MIFARE Ultralight"
+					cardInfo.Size = 64
+				}
 				cardInfo.Writable = true
 				return
-			case 0x6D: // 872 bytes -> NTAG216
-				cardInfo.Type = "NTAG216"
-				cardInfo.Size = 888
+			case 0x3E: // 496 bytes -> NTAG215 (requires GET_VERSION confirmation)
+				if getVersionSucceeded {
+					cardInfo.Type = "NTAG215"
+					cardInfo.Size = 504
+				} else {
+					cardInfo.Type = "MIFARE Ultralight"
+					cardInfo.Size = 64
+				}
+				cardInfo.Writable = true
+				return
+			case 0x6D: // 872 bytes -> NTAG216 (requires GET_VERSION confirmation)
+				if getVersionSucceeded {
+					cardInfo.Type = "NTAG216"
+					cardInfo.Size = 888
+				} else {
+					cardInfo.Type = "MIFARE Ultralight"
+					cardInfo.Size = 64
+				}
 				cardInfo.Writable = true
 				return
 			}
@@ -183,50 +459,109 @@ func detectCardType(card *scard.Card, cardInfo *Card) {
 
 	if err == nil && len(rsp) >= 6 && rsp[len(rsp)-2] == 0x90 {
 		// Page 3 contains capability container
-		// Byte 2 of CC indicates memory size
-		if len(rsp) >= 3 {
+		// CC byte 0 (index 0): NDEF magic (must be 0xE1 for valid NDEF)
+		// CC byte 2 (index 2): Memory size indicator
+		if len(rsp) >= 3 && rsp[0] == 0xE1 { // Validate NDEF magic byte
+			ccDetectionFoundNDEF = true
 			ccSize := rsp[2]
 
+			// IMPORTANT: For NTAG detection, we require GET_VERSION to have succeeded.
+			// All NXP NTAG21x tags support GET_VERSION. Plain MIFARE Ultralight does NOT.
 			switch ccSize {
-			case 0x12: // 144 bytes -> NTAG213
-				cardInfo.Type = "NTAG213"
-				cardInfo.Size = 180
+			case 0x06: // 48 bytes -> MIFARE Ultralight
+				cardInfo.Type = "MIFARE Ultralight"
+				cardInfo.Size = 48
 				cardInfo.Writable = true
 				return
-			case 0x3E: // 496 bytes -> NTAG215
-				cardInfo.Type = "NTAG215"
-				cardInfo.Size = 504
+			case 0x12: // 144 bytes -> NTAG213 (requires GET_VERSION confirmation)
+				if getVersionSucceeded {
+					cardInfo.Type = "NTAG213"
+					cardInfo.Size = 180
+				} else {
+					cardInfo.Type = "MIFARE Ultralight"
+					cardInfo.Size = 64
+				}
 				cardInfo.Writable = true
 				return
-			case 0x6D: // 872 bytes -> NTAG216
-				cardInfo.Type = "NTAG216"
-				cardInfo.Size = 888
+			case 0x3E: // 496 bytes -> NTAG215 (requires GET_VERSION confirmation)
+				if getVersionSucceeded {
+					cardInfo.Type = "NTAG215"
+					cardInfo.Size = 504
+				} else {
+					cardInfo.Type = "MIFARE Ultralight"
+					cardInfo.Size = 64
+				}
+				cardInfo.Writable = true
+				return
+			case 0x6D: // 872 bytes -> NTAG216 (requires GET_VERSION confirmation)
+				if getVersionSucceeded {
+					cardInfo.Type = "NTAG216"
+					cardInfo.Size = 888
+				} else {
+					cardInfo.Type = "MIFARE Ultralight"
+					cardInfo.Size = 64
+				}
 				cardInfo.Writable = true
 				return
 			}
 		}
 	}
 
+	// Method 2c: MIFARE Classic authentication probe
+	// Some readers (e.g., ACR1252U) return incorrect ATR byte 14 for MIFARE Classic,
+	// causing them to be misidentified as Type 2 tags. This probe tries to authenticate
+	// to sector 0 - Classic cards require this, NTAG/Ultralight don't support it.
+	// Only try this if we haven't identified the card yet and ATR suggests ISO 14443-A.
+	if contains(atr, "03060300") {
+		// Load default transport key (FFFFFFFFFFFF) into reader's key slot
+		loadKeyCmd := []byte{0xFF, 0x82, 0x00, 0x00, 0x06, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
+		rsp, err = card.Transmit(loadKeyCmd)
+		if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+			// Try to authenticate to block 0 with Key A (0x60)
+			// If this succeeds, it's definitely MIFARE Classic
+			authCmd := []byte{0xFF, 0x86, 0x00, 0x00, 0x05, 0x01, 0x00, 0x00, 0x60, 0x00}
+			rsp, err = card.Transmit(authCmd)
+			if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+				logging.Debug(logging.CatCard, "MIFARE Classic detected via authentication probe", nil)
+				cardInfo.Type = "MIFARE Classic"
+				cardInfo.Writable = true
+				cardInfo.Size = 1024
+				return
+			}
+		}
+	}
+
 	// Method 3: Check ATR patterns for NTAG, MIFARE, and ISO 15693
-	atr := cardInfo.ATR
+	// Note: atr is already set at the start of detectCardType for protocol detection
 	if len(atr) >= 30 && (atr[0:4] == "3b8f" || atr[0:4] == "3b8b") {
 		// Check for ISO 15693 cards (ICode SLI, ICode Slix, ICode Slix 2)
 		// Pattern: 03 06 0b at bytes 10-12 (hex string position 20-25)
 		if contains(atr, "03060b") {
-			// ISO 15693 family (ICode SLI/Slix/Slix-2)
+			// ISO 15693 family - check UID manufacturer byte to identify vendor
+			// For ISO 15693, the UID is 8 bytes with manufacturer code in last byte (reversed order)
+			// 0xE0 = NXP (ICode SLI/Slix/Slix-2)
+			uid := cardInfo.UID
+			if len(uid) >= 16 && uid[14:16] == "e0" {
+				// NXP ICode family (SLI, Slix, Slix2)
+				cardInfo.Type = "ICode SLIX"
+				cardInfo.Writable = true
+				cardInfo.Size = 896 // ICode SLIX2 has 2560 bits = 320 bytes, SLIX has 896 bytes
+				return
+			}
+			// Generic ISO 15693
 			cardInfo.Type = "ISO 15693"
 			cardInfo.Writable = true
-			cardInfo.Size = 1024 // ICode Slix 2 has variable sizes, default to 1KB
+			cardInfo.Size = 1024
 			return
 		}
 
-		// Both NTAG and MIFARE can have ATRs starting with 3b8f and containing 03060300
-		// The key difference is at byte 14 (hex string position 28-29):
+		// Both NTAG, MIFARE Ultralight, and MIFARE Classic can have ATRs starting with
+		// 3b8f and containing 03060300. The key difference is at byte 14 (hex position 28-29):
 		// - MIFARE Classic: 01
-		// - NTAG: 03
+		// - NTAG / MIFARE Ultralight: 03 (can't distinguish by ATR alone)
 
 		if contains(atr, "03060300") {
-			// Check byte 14 to distinguish NTAG from MIFARE
+			// Check byte 14 to distinguish MIFARE Classic from other types
 			if atr[28:30] == "01" {
 				// MIFARE Classic
 				cardInfo.Type = "MIFARE Classic"
@@ -234,11 +569,18 @@ func detectCardType(card *scard.Card, cardInfo *Card) {
 				cardInfo.Size = 1024
 				return
 			} else if atr[28:30] == "03" {
-				// NTAG family
-				cardInfo.Type = "NTAG (type unknown)"
-				cardInfo.Writable = true
-				cardInfo.Size = 180
-				return
+				// ISO 14443-3A Type 2 tag (could be NTAG or MIFARE Ultralight)
+				// If we found valid NDEF CC earlier, CC detection should have identified it.
+				// If we reach here with valid NDEF, it means CC size didn't match known types.
+				// If CC detection failed (no valid NDEF), this is likely plain MIFARE Ultralight
+				// without NDEF formatting, or with non-standard CC.
+				if !ccDetectionFoundNDEF && !getVersionSucceeded {
+					cardInfo.Type = "MIFARE Ultralight"
+					cardInfo.Size = 64 // Plain Ultralight has 64 bytes (48 user bytes)
+					cardInfo.Writable = true
+					return
+				}
+				// Otherwise report unknown - we have NDEF but unknown CC size
 			}
 		}
 

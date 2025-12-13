@@ -1,0 +1,13 @@
+{
+  "reader": "ACS ACR1252 Dual Reader PICC",
+  "reader_id": "acr1252u",
+  "tag_type": "MIFARE Classic",
+  "uid": "10ba8139",
+  "atr": "3b8f8001804f0ca0000003060300030000000068",
+  "protocol": "NFC-A",
+  "protocol_iso": "ISO 14443-3A",
+  "responses": {},
+  "detected_type": "MIFARE Ultralight",
+  "detected_size": 64,
+  "captured_at": "2025-12-13T19:31:50.985070"
+}
