@@ -137,7 +137,7 @@ func detectCardType(card *scard.Card, cardInfo *Card) {
 		rsp, err = card.Transmit(setProtocol)
 		if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
 			// Send GET_VERSION command
-			rsp, err = card.Transmit(getVersionTransparent)
+			rsp, _ = card.Transmit(getVersionTransparent)
 
 			logging.Debug(logging.CatCard, "GET_VERSION response", map[string]any{
 				"method":   "0-transparent",
@@ -186,10 +186,10 @@ func detectCardType(card *scard.Card, cardInfo *Card) {
 						"got_header":      fmt.Sprintf("0x%02x", header),
 					})
 					// Fall through to other detection methods
-					card.Transmit(endSession)
+					_, _ = card.Transmit(endSession)
 				} else if productType == 0x04 { // NTAG family
 					getVersionSucceeded = true
-					card.Transmit(endSession) // Clean up session
+					_, _ = card.Transmit(endSession) // Clean up session
 					switch storageSize {
 					case 0x0F: // NTAG213
 						cardInfo.Type = "NTAG213"
@@ -208,8 +208,8 @@ func detectCardType(card *scard.Card, cardInfo *Card) {
 						return
 					}
 				} else if productType == 0x03 { // MIFARE Ultralight family
-					getVersionSucceeded = true
-					card.Transmit(endSession) // Clean up session
+					// Note: don't set getVersionSucceeded - all paths return here
+					_, _ = card.Transmit(endSession) // Clean up session
 					switch storageSize {
 					case 0x0B: // Ultralight EV1 MF0UL11 (48 bytes)
 						cardInfo.Type = "MIFARE Ultralight EV1"
@@ -231,7 +231,7 @@ func detectCardType(card *scard.Card, cardInfo *Card) {
 			}
 		}
 		// End session (even if commands failed)
-		card.Transmit(endSession)
+		_, _ = card.Transmit(endSession)
 	}
 
 	// Method 1a: Try GET_VERSION with standard PC/SC passthrough
