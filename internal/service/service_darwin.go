@@ -21,7 +21,6 @@ const (
     <key>ProgramArguments</key>
     <array>
         <string>{{.ExecutablePath}}</string>
-        <string>--no-tray</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
