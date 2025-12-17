@@ -248,6 +248,40 @@ await ws.writeUltralightPage(0, 4, {
 - Each page is 4 bytes (8 hex characters)
 - Password is only needed for EV1 variants with password protection enabled
 
+### AES-Encrypted MIFARE Classic Operations
+
+For MIFARE Classic tags that require AES-encrypted data (e.g., certain filament spool tags):
+
+```typescript
+// Derive a 6-byte sector key from the card's UID using AES encryption
+const derived = await ws.deriveUIDKeyAES(0, {
+  aesKey: '713362755e74316e71665a2870662431'  // 16 bytes as hex (32 chars)
+});
+console.log('Derived key:', derived.key);  // 6 bytes as hex (12 chars)
+
+// Encrypt data with AES and write to a block
+await ws.aesEncryptAndWriteBlock(0, 4, {
+  data: '30303030303030303030303030303030',  // 16 bytes plaintext (will be encrypted)
+  aesKey: '484043466b526e7a404b4174424a7032',  // AES encryption key
+  authKey: 'FFFFFFFFFFFF',                      // MIFARE auth key
+  authKeyType: 'A'
+});
+
+// Update sector trailer keys (preserves access bits)
+await ws.updateSectorTrailerKeys(0, 7, {
+  keyA: derived.key,      // New Key A
+  keyB: derived.key,      // New Key B
+  authKey: 'FFFFFFFFFFFF', // Current auth key
+  authKeyType: 'A'
+});
+```
+
+**Notes:**
+- AES keys are 16 bytes (32 hex characters)
+- The derived key is 6 bytes (12 hex characters) - suitable for MIFARE authentication
+- Data is encrypted before being written to the card
+- Sector trailers are at blocks 3, 7, 11, 15, etc. (for 1K cards)
+
 ---
 
 ## REST API
@@ -350,6 +384,9 @@ poller.start();
 | `writeMifareBlock(reader, block, options)` | Write raw MIFARE Classic block |
 | `readUltralightPage(reader, page, options?)` | Read raw MIFARE Ultralight page |
 | `writeUltralightPage(reader, page, options)` | Write raw MIFARE Ultralight page |
+| `deriveUIDKeyAES(reader, options)` | Derive 6-byte key from UID via AES |
+| `aesEncryptAndWriteBlock(reader, block, options)` | AES encrypt + write block |
+| `updateSectorTrailerKeys(reader, block, options)` | Update sector trailer keys |
 
 #### WebSocket Events
 
@@ -375,6 +412,9 @@ poller.start();
 | `writeMifareBlock(reader, block, options)` | Write raw MIFARE Classic block |
 | `readUltralightPage(reader, page, options?)` | Read raw MIFARE Ultralight page |
 | `writeUltralightPage(reader, page, options)` | Write raw MIFARE Ultralight page |
+| `deriveUIDKeyAES(reader, options)` | Derive 6-byte key from UID via AES |
+| `aesEncryptAndWriteBlock(reader, block, options)` | AES encrypt + write block |
+| `updateSectorTrailerKeys(reader, block, options)` | Update sector trailer keys |
 | `pollCard(reader, options)` | Create a CardPoller |
 
 ### Types
@@ -454,6 +494,29 @@ interface UltralightReadOptions {
 interface UltralightWriteOptions {
   data: string;       // 8 hex chars = 4 bytes
   password?: string;  // 8 hex chars = 4 bytes (EV1 only)
+}
+
+// AES MIFARE Classic types
+interface DerivedKeyData {
+  key: string;  // 12 hex chars = 6 bytes
+}
+
+interface DeriveUIDKeyOptions {
+  aesKey: string;  // 32 hex chars = 16 bytes (AES-128 key)
+}
+
+interface AESEncryptWriteOptions {
+  data: string;       // 32 hex chars = 16 bytes (plaintext to encrypt)
+  aesKey: string;     // 32 hex chars = 16 bytes (AES-128 key)
+  authKey: string;    // 12 hex chars = 6 bytes (MIFARE auth key)
+  authKeyType?: MifareKeyType;
+}
+
+interface UpdateSectorTrailerOptions {
+  keyA: string;       // 12 hex chars = 6 bytes
+  keyB: string;       // 12 hex chars = 6 bytes
+  authKey: string;    // 12 hex chars = 6 bytes
+  authKeyType?: MifareKeyType;
 }
 ```
 

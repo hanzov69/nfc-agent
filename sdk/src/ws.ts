@@ -16,6 +16,12 @@ import type {
   UltralightPageData,
   UltralightReadOptions,
   UltralightWriteOptions,
+  UltralightBatchWriteOptions,
+  UltralightBatchWriteResult,
+  DerivedKeyData,
+  DeriveUIDKeyOptions,
+  AESEncryptWriteOptions,
+  UpdateSectorTrailerOptions,
 } from './types.js';
 import { ConnectionError, CardError, NFCAgentError } from './errors.js';
 
@@ -343,7 +349,7 @@ export class NFCAgentWebSocket {
    */
   async readCard(readerIndex: number): Promise<Card> {
     try {
-      return await this.request<Card>('read_card', { reader: readerIndex });
+      return await this.request<Card>('read_card', { readerIndex });
     } catch (error) {
       if (error instanceof NFCAgentError) {
         throw new CardError(error.message);
@@ -363,7 +369,7 @@ export class NFCAgentWebSocket {
   ): Promise<void> {
     try {
       await this.request('write_card', {
-        reader: readerIndex,
+        readerIndex,
         data: options.data,
         dataType: options.dataType,
         url: options.url,
@@ -382,7 +388,7 @@ export class NFCAgentWebSocket {
    */
   async eraseCard(readerIndex: number): Promise<void> {
     try {
-      await this.request('erase_card', { reader: readerIndex });
+      await this.request('erase_card', { readerIndex });
     } catch (error) {
       if (error instanceof NFCAgentError) {
         throw new CardError(error.message);
@@ -397,7 +403,7 @@ export class NFCAgentWebSocket {
    */
   async lockCard(readerIndex: number): Promise<void> {
     try {
-      await this.request('lock_card', { reader: readerIndex, confirm: true });
+      await this.request('lock_card', { readerIndex, confirm: true });
     } catch (error) {
       if (error instanceof NFCAgentError) {
         throw new CardError(error.message);
@@ -413,7 +419,7 @@ export class NFCAgentWebSocket {
    */
   async setPassword(readerIndex: number, password: string): Promise<void> {
     try {
-      await this.request('set_password', { reader: readerIndex, password });
+      await this.request('set_password', { readerIndex, password });
     } catch (error) {
       if (error instanceof NFCAgentError) {
         throw new CardError(error.message);
@@ -429,7 +435,7 @@ export class NFCAgentWebSocket {
    */
   async removePassword(readerIndex: number, password: string): Promise<void> {
     try {
-      await this.request('remove_password', { reader: readerIndex, password });
+      await this.request('remove_password', { readerIndex, password });
     } catch (error) {
       if (error instanceof NFCAgentError) {
         throw new CardError(error.message);
@@ -445,7 +451,7 @@ export class NFCAgentWebSocket {
    */
   async writeRecords(readerIndex: number, records: NDEFRecord[]): Promise<void> {
     try {
-      await this.request('write_records', { reader: readerIndex, records });
+      await this.request('write_records', { readerIndex, records });
     } catch (error) {
       if (error instanceof NFCAgentError) {
         throw new CardError(error.message);
@@ -561,11 +567,115 @@ export class NFCAgentWebSocket {
   }
 
   /**
+   * Write multiple pages to a MIFARE Ultralight / NTAG card in a single card session.
+   * This is more efficient and reliable than multiple individual writeUltralightPage calls.
+   * @param readerIndex - Index of the reader (0-based)
+   * @param options - Options including array of page writes and optional password
+   * @returns Results for each page write operation
+   */
+  async writeUltralightPages(
+    readerIndex: number,
+    options: UltralightBatchWriteOptions
+  ): Promise<UltralightBatchWriteResult> {
+    try {
+      return await this.request<UltralightBatchWriteResult>('write_ultralight_pages', {
+        readerIndex,
+        pages: options.pages,
+        password: options?.password,
+      });
+    } catch (error) {
+      if (error instanceof NFCAgentError) {
+        throw new CardError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Derive a 6-byte MIFARE sector key from the card's UID using AES-128-ECB encryption.
+   * @param readerIndex - Index of the reader (0-based)
+   * @param options - Options including the AES key
+   * @returns Derived 6-byte key as hex string (12 characters)
+   */
+  async deriveUIDKeyAES(
+    readerIndex: number,
+    options: DeriveUIDKeyOptions
+  ): Promise<DerivedKeyData> {
+    try {
+      return await this.request<DerivedKeyData>('derive_uid_key_aes', {
+        readerIndex,
+        aesKey: options.aesKey,
+      });
+    } catch (error) {
+      if (error instanceof NFCAgentError) {
+        throw new CardError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Encrypt data with AES-128-ECB and write to a MIFARE Classic block.
+   * @param readerIndex - Index of the reader (0-based)
+   * @param block - Block number to write (cannot be a sector trailer)
+   * @param options - Options including data, AES key, and authentication key
+   */
+  async aesEncryptAndWriteBlock(
+    readerIndex: number,
+    block: number,
+    options: AESEncryptWriteOptions
+  ): Promise<void> {
+    try {
+      await this.request('aes_encrypt_and_write_block', {
+        readerIndex,
+        block,
+        data: options.data,
+        aesKey: options.aesKey,
+        authKey: options.authKey,
+        authKeyType: options.authKeyType,
+      });
+    } catch (error) {
+      if (error instanceof NFCAgentError) {
+        throw new CardError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Update a MIFARE Classic sector trailer with new keys while preserving access bits.
+   * @param readerIndex - Index of the reader (0-based)
+   * @param block - Sector trailer block number (3, 7, 11, 15, ... for 1K)
+   * @param options - Options including new keys and authentication key
+   */
+  async updateSectorTrailerKeys(
+    readerIndex: number,
+    block: number,
+    options: UpdateSectorTrailerOptions
+  ): Promise<void> {
+    try {
+      await this.request('update_sector_trailer_keys', {
+        readerIndex,
+        block,
+        keyA: options.keyA,
+        keyB: options.keyB,
+        authKey: options.authKey,
+        authKeyType: options.authKeyType,
+      });
+    } catch (error) {
+      if (error instanceof NFCAgentError) {
+        throw new CardError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Subscribe to card events on a reader
    * @param readerIndex - Index of the reader to subscribe to
    */
   async subscribe(readerIndex: number): Promise<void> {
-    await this.request('subscribe', { reader: readerIndex });
+    await this.request('subscribe', { readerIndex });
   }
 
   /**
@@ -573,7 +683,7 @@ export class NFCAgentWebSocket {
    * @param readerIndex - Index of the reader to unsubscribe from
    */
   async unsubscribe(readerIndex: number): Promise<void> {
-    await this.request('unsubscribe', { reader: readerIndex });
+    await this.request('unsubscribe', { readerIndex });
   }
 
   /**

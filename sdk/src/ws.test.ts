@@ -200,7 +200,7 @@ describe('NFCAgentWebSocket', () => {
 
       const sentMessage = JSON.parse(mockWs.send.mock.calls[0][0]);
       expect(sentMessage.type).toBe('read_card');
-      expect(sentMessage.payload.reader).toBe(0);
+      expect(sentMessage.payload.readerIndex).toBe(0);
 
       mockWs.simulateMessage({
         type: 'read_card',
@@ -246,7 +246,7 @@ describe('NFCAgentWebSocket', () => {
 
       const sentMessage = JSON.parse(mockWs.send.mock.calls[0][0]);
       expect(sentMessage.type).toBe('write_card');
-      expect(sentMessage.payload.reader).toBe(0);
+      expect(sentMessage.payload.readerIndex).toBe(0);
       expect(sentMessage.payload.data).toBe('Hello');
       expect(sentMessage.payload.dataType).toBe('text');
 
@@ -273,7 +273,7 @@ describe('NFCAgentWebSocket', () => {
 
       const sentMessage = JSON.parse(mockWs.send.mock.calls[0][0]);
       expect(sentMessage.type).toBe('subscribe');
-      expect(sentMessage.payload.reader).toBe(0);
+      expect(sentMessage.payload.readerIndex).toBe(0);
 
       mockWs.simulateMessage({
         type: 'subscribe',
@@ -475,7 +475,7 @@ describe('NFCAgentWebSocket', () => {
 
       const sentMessage = JSON.parse(mockWs.send.mock.calls[0][0]);
       expect(sentMessage.type).toBe('set_password');
-      expect(sentMessage.payload.reader).toBe(0);
+      expect(sentMessage.payload.readerIndex).toBe(0);
       expect(sentMessage.payload.password).toBe('mypassword');
 
       mockWs.simulateMessage({
@@ -521,7 +521,7 @@ describe('NFCAgentWebSocket', () => {
 
       const sentMessage = JSON.parse(mockWs.send.mock.calls[0][0]);
       expect(sentMessage.type).toBe('remove_password');
-      expect(sentMessage.payload.reader).toBe(0);
+      expect(sentMessage.payload.readerIndex).toBe(0);
       expect(sentMessage.payload.password).toBe('mypassword');
 
       mockWs.simulateMessage({
@@ -571,7 +571,7 @@ describe('NFCAgentWebSocket', () => {
 
       const sentMessage = JSON.parse(mockWs.send.mock.calls[0][0]);
       expect(sentMessage.type).toBe('write_records');
-      expect(sentMessage.payload.reader).toBe(0);
+      expect(sentMessage.payload.readerIndex).toBe(0);
       expect(sentMessage.payload.records).toEqual(records);
 
       mockWs.simulateMessage({

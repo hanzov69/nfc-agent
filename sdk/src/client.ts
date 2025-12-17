@@ -13,6 +13,12 @@ import type {
   UltralightPageData,
   UltralightReadOptions,
   UltralightWriteOptions,
+  UltralightBatchWriteOptions,
+  UltralightBatchWriteResult,
+  DerivedKeyData,
+  DeriveUIDKeyOptions,
+  AESEncryptWriteOptions,
+  UpdateSectorTrailerOptions,
 } from './types.js';
 import { ConnectionError, CardError, APIError } from './errors.js';
 import { CardPoller } from './poller.js';
@@ -294,6 +300,129 @@ export class NFCAgentClient {
           password: options.password,
         }),
       });
+    } catch (error) {
+      if (error instanceof APIError) {
+        throw new CardError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Write multiple pages to a MIFARE Ultralight / NTAG card in a single card session.
+   * This is more efficient and reliable than multiple individual writeUltralightPage calls.
+   * @param readerIndex - Index of the reader (0-based)
+   * @param options - Options including array of page writes and optional password
+   * @returns Results for each page write operation
+   * @throws CardError if batch write fails
+   */
+  async writeUltralightPages(
+    readerIndex: number,
+    options: UltralightBatchWriteOptions
+  ): Promise<UltralightBatchWriteResult> {
+    try {
+      return await this.request<UltralightBatchWriteResult>(
+        `/v1/readers/${readerIndex}/ultralight/batch`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            pages: options.pages,
+            password: options.password,
+          }),
+        }
+      );
+    } catch (error) {
+      if (error instanceof APIError) {
+        throw new CardError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Derive a 6-byte MIFARE sector key from the card's UID using AES-128-ECB encryption.
+   * The algorithm expands the 4-byte UID to 16 bytes and encrypts with the provided AES key.
+   * @param readerIndex - Index of the reader (0-based)
+   * @param options - Options including the AES key
+   * @returns Derived 6-byte key as hex string (12 characters)
+   * @throws CardError if derivation fails
+   */
+  async deriveUIDKeyAES(
+    readerIndex: number,
+    options: DeriveUIDKeyOptions
+  ): Promise<DerivedKeyData> {
+    try {
+      return await this.request<DerivedKeyData>(
+        `/v1/readers/${readerIndex}/mifare/derive-key`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ aesKey: options.aesKey }),
+        }
+      );
+    } catch (error) {
+      if (error instanceof APIError) {
+        throw new CardError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Encrypt data with AES-128-ECB and write to a MIFARE Classic block.
+   * The data is encrypted before being written to the card.
+   * @param readerIndex - Index of the reader (0-based)
+   * @param block - Block number to write (0-63 for 1K, 0-255 for 4K). Cannot be a sector trailer.
+   * @param options - Options including data, AES key, and authentication key
+   * @throws CardError if write fails
+   */
+  async aesEncryptAndWriteBlock(
+    readerIndex: number,
+    block: number,
+    options: AESEncryptWriteOptions
+  ): Promise<void> {
+    try {
+      await this.request(`/v1/readers/${readerIndex}/mifare/aes-write/${block}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          data: options.data,
+          aesKey: options.aesKey,
+          authKey: options.authKey,
+          authKeyType: options.authKeyType,
+        }),
+      });
+    } catch (error) {
+      if (error instanceof APIError) {
+        throw new CardError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Update a MIFARE Classic sector trailer with new keys while preserving access bits.
+   * @param readerIndex - Index of the reader (0-based)
+   * @param block - Sector trailer block number (3, 7, 11, 15, ... for 1K)
+   * @param options - Options including new keys and authentication key
+   * @throws CardError if update fails
+   */
+  async updateSectorTrailerKeys(
+    readerIndex: number,
+    block: number,
+    options: UpdateSectorTrailerOptions
+  ): Promise<void> {
+    try {
+      await this.request(
+        `/v1/readers/${readerIndex}/mifare/update-trailer/${block}`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            keyA: options.keyA,
+            keyB: options.keyB,
+            authKey: options.authKey,
+            authKeyType: options.authKeyType,
+          }),
+        }
+      );
     } catch (error) {
       if (error instanceof APIError) {
         throw new CardError(error.message);

@@ -179,6 +179,9 @@ Configure via environment variables:
 | `POST` | `/v1/readers/{n}/mifare/{block}` | Write MIFARE Classic block |
 | `GET` | `/v1/readers/{n}/ultralight/{page}` | Read MIFARE Ultralight page |
 | `POST` | `/v1/readers/{n}/ultralight/{page}` | Write MIFARE Ultralight page |
+| `POST` | `/v1/readers/{n}/mifare/derive-key` | Derive 6-byte key from UID via AES |
+| `POST` | `/v1/readers/{n}/mifare/aes-write/{block}` | AES encrypt + write block |
+| `POST` | `/v1/readers/{n}/mifare/update-trailer/{block}` | Update sector trailer keys |
 | `GET` | `/v1/supported-readers` | List supported reader models |
 | `GET` | `/v1/version` | Get version and update info |
 | `GET` | `/v1/health` | Health check |
@@ -211,6 +214,10 @@ Connect to `ws://127.0.0.1:32145/v1/ws` for real-time card events.
 - `subscribe` / `unsubscribe` - Real-time card detection
 - `erase_card`, `lock_card`, `set_password`, `remove_password`
 - `read_mifare_block`, `write_mifare_block` - Raw MIFARE Classic block access
+- `read_ultralight_page`, `write_ultralight_page` - Raw MIFARE Ultralight page access
+- `derive_uid_key_aes` - Derive 6-byte key from UID via AES
+- `aes_encrypt_and_write_block` - AES encrypt + write MIFARE block
+- `update_sector_trailer_keys` - Update sector trailer keys
 - `version` - Get version and update info (same response as HTTP endpoint)
 
 **Events:**
@@ -376,6 +383,101 @@ await client.writeUltralightPage(0, 4, { data: 'DEADBEEF', password: '12345678' 
 MIFARE Ultralight EV1 supports password protection:
 - Password is 4 bytes (8 hex characters)
 - Use `password` parameter when accessing protected pages
+
+## AES-Encrypted MIFARE Classic Operations
+
+For MIFARE Classic tags that require AES-encrypted data (e.g., certain third-party filament spool tags):
+
+### Derive UID Key via AES
+
+Derives a 6-byte MIFARE sector key from the card's 4-byte UID using AES-128-ECB encryption.
+
+**HTTP:**
+```bash
+curl -X POST http://127.0.0.1:32145/v1/readers/0/mifare/derive-key \
+  -H "Content-Type: application/json" \
+  -d '{"aesKey": "713362755e74316e71665a2870662431"}'
+```
+
+**Response:**
+```json
+{"key": "abc123def456"}
+```
+
+**JavaScript SDK:**
+```typescript
+const derived = await ws.deriveUIDKeyAES(0, {
+  aesKey: '713362755e74316e71665a2870662431'  // 16 bytes as hex (32 chars)
+});
+console.log('Derived key:', derived.key);  // 6 bytes as hex (12 chars)
+```
+
+### AES Encrypt and Write Block
+
+Encrypts 16 bytes of data with AES-128-ECB and writes to a MIFARE Classic block.
+
+**HTTP:**
+```bash
+curl -X POST http://127.0.0.1:32145/v1/readers/0/mifare/aes-write/4 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "data": "30303030303030303030303030303030",
+    "aesKey": "484043466b526e7a404b4174424a7032",
+    "authKey": "FFFFFFFFFFFF",
+    "authKeyType": "A"
+  }'
+```
+
+**JavaScript SDK:**
+```typescript
+await ws.aesEncryptAndWriteBlock(0, 4, {
+  data: '30303030303030303030303030303030',  // 16 bytes plaintext (will be encrypted)
+  aesKey: '484043466b526e7a404b4174424a7032',  // AES encryption key
+  authKey: 'FFFFFFFFFFFF',                      // MIFARE auth key
+  authKeyType: 'A'
+});
+```
+
+### Update Sector Trailer Keys
+
+Updates a MIFARE Classic sector trailer with new keys while preserving access bits.
+
+**HTTP:**
+```bash
+curl -X POST http://127.0.0.1:32145/v1/readers/0/mifare/update-trailer/7 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "keyA": "abc123def456",
+    "keyB": "abc123def456",
+    "authKey": "FFFFFFFFFFFF",
+    "authKeyType": "A"
+  }'
+```
+
+**JavaScript SDK:**
+```typescript
+await ws.updateSectorTrailerKeys(0, 7, {
+  keyA: derived.key,       // New Key A
+  keyB: derived.key,       // New Key B
+  authKey: 'FFFFFFFFFFFF', // Current auth key
+  authKeyType: 'A'
+});
+```
+
+### Parameter Reference
+
+| Parameter | Size | Description |
+|-----------|------|-------------|
+| `aesKey` | 32 hex chars (16 bytes) | AES-128 encryption key |
+| `authKey` | 12 hex chars (6 bytes) | MIFARE sector authentication key |
+| `keyA`, `keyB` | 12 hex chars (6 bytes) | New sector trailer keys |
+| `data` | 32 hex chars (16 bytes) | Block data to encrypt/write |
+| `authKeyType` | `"A"` or `"B"` | Key type for authentication |
+
+**Notes:**
+- Sector trailers are at blocks 3, 7, 11, 15, etc. (for MIFARE Classic 1K)
+- The derived key from `derive-key` is suitable for MIFARE authentication
+- Data is encrypted with AES before being written to the card
 
 ## OpenPrintTag Support
 

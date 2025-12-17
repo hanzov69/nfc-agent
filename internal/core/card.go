@@ -1,6 +1,7 @@
 package core
 
 import (
+	"crypto/aes"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -122,121 +123,13 @@ func detectCardType(card *scard.Card, cardInfo *Card) {
 	// Track if CC detection found valid NDEF - used to gate ATR-based fallback detection.
 	ccDetectionFoundNDEF := false
 
-	// Method 0: Try GET_VERSION via Transparent Exchange (ACR1552 specific)
-	// This uses the PC/SC 2.0 Part 3 Transparent Exchange command sequence
-	// Reference: https://community.nxp.com/t5/NFC/NFC-NTAG213-READ-SIG-Originality-Signature-Verification-Using/m-p/1890732
-	startSession := []byte{0xFF, 0xC2, 0x00, 0x00, 0x02, 0x81, 0x00}
-	setProtocol := []byte{0xFF, 0xC2, 0x00, 0x02, 0x04, 0x8F, 0x02, 0x00, 0x03}
-	getVersionTransparent := []byte{0xFF, 0xC2, 0x00, 0x01, 0x03, 0x95, 0x01, 0x60}
-	endSession := []byte{0xFF, 0xC2, 0x00, 0x00, 0x02, 0x82, 0x00}
-
-	// Start transparent session
-	rsp, err := card.Transmit(startSession)
-	if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
-		// Set protocol to ISO 14443-A Layer 3
-		rsp, err = card.Transmit(setProtocol)
-		if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
-			// Send GET_VERSION command
-			rsp, _ = card.Transmit(getVersionTransparent)
-
-			logging.Debug(logging.CatCard, "GET_VERSION response", map[string]any{
-				"method":   "0-transparent",
-				"response": hex.EncodeToString(rsp),
-			})
-
-			// Parse response - TLV format with tag 0x97 containing the version data
-			// Example: c0030090009201009602000097080004040201000f039000
-			// We need to find tag 0x97 which contains the 8-byte version response
-			var versionData []byte
-			for i := 0; i < len(rsp)-2; i++ {
-				if rsp[i] == 0x97 { // Version data tag
-					tagLen := int(rsp[i+1])
-					if i+2+tagLen <= len(rsp) && tagLen >= 7 {
-						versionData = rsp[i+2 : i+2+tagLen]
-						break
-					}
-				}
-			}
-
-			if len(versionData) >= 7 {
-				// Version data: [header, vendor, productType, subtype, major, minor, storage, protocol]
-				// Validate header bytes - plain MIFARE Ultralight doesn't support GET_VERSION
-				// and may return garbage data. Valid responses have:
-				// - Byte 0: 0x00 (fixed header)
-				// - Byte 1: 0x04 (NXP vendor ID)
-				header := versionData[0]
-				vendor := versionData[1]
-				productType := versionData[2]
-				storageSize := versionData[6]
-
-				logging.Debug(logging.CatCard, "Transparent GET_VERSION parsed", map[string]any{
-					"versionData": hex.EncodeToString(versionData),
-					"header":      fmt.Sprintf("0x%02x", header),
-					"vendor":      fmt.Sprintf("0x%02x", vendor),
-					"productType": fmt.Sprintf("0x%02x", productType),
-					"storageSize": fmt.Sprintf("0x%02x", storageSize),
-				})
-
-				// Only trust version data if header byte is 0x00 (fixed GET_VERSION identifier)
-				// Tags that don't support GET_VERSION may return garbage with random header
-				// Note: vendor byte varies (0x04=NXP, but some compatible tags use other values)
-				if header != 0x00 {
-					logging.Debug(logging.CatCard, "Invalid GET_VERSION header, ignoring response", map[string]any{
-						"expected_header": "0x00",
-						"got_header":      fmt.Sprintf("0x%02x", header),
-					})
-					// Fall through to other detection methods
-					_, _ = card.Transmit(endSession)
-				} else if productType == 0x04 { // NTAG family
-					getVersionSucceeded = true
-					_, _ = card.Transmit(endSession) // Clean up session
-					switch storageSize {
-					case 0x0F: // NTAG213
-						cardInfo.Type = "NTAG213"
-						cardInfo.Size = 180
-						cardInfo.Writable = true
-						return
-					case 0x11: // NTAG215
-						cardInfo.Type = "NTAG215"
-						cardInfo.Size = 504
-						cardInfo.Writable = true
-						return
-					case 0x13: // NTAG216
-						cardInfo.Type = "NTAG216"
-						cardInfo.Size = 888
-						cardInfo.Writable = true
-						return
-					}
-				} else if productType == 0x03 { // MIFARE Ultralight family
-					// Note: don't set getVersionSucceeded - all paths return here
-					_, _ = card.Transmit(endSession) // Clean up session
-					switch storageSize {
-					case 0x0B: // Ultralight EV1 MF0UL11 (48 bytes)
-						cardInfo.Type = "MIFARE Ultralight EV1"
-						cardInfo.Size = 48
-						cardInfo.Writable = true
-						return
-					case 0x0E: // Ultralight EV1 MF0UL21 (128 bytes)
-						cardInfo.Type = "MIFARE Ultralight EV1"
-						cardInfo.Size = 128
-						cardInfo.Writable = true
-						return
-					default: // Unknown Ultralight variant
-						cardInfo.Type = "MIFARE Ultralight"
-						cardInfo.Size = 64
-						cardInfo.Writable = true
-						return
-					}
-				}
-			}
-		}
-		// End session (even if commands failed)
-		_, _ = card.Transmit(endSession)
-	}
+	// NOTE: Transparent exchange GET_VERSION (Method 0) was removed because it leaves
+	// the ACR1552 reader in a state where subsequent standard PC/SC commands fail.
+	// Standard methods 1a and 1b work on ACR1552 without this issue.
 
 	// Method 1a: Try GET_VERSION with standard PC/SC passthrough
 	getVersionCmd := []byte{0xFF, 0x00, 0x00, 0x00, 0x02, 0x60, 0x00}
-	rsp, err = card.Transmit(getVersionCmd)
+	rsp, err := card.Transmit(getVersionCmd)
 
 	// Log GET_VERSION response for diagnostics
 	if err == nil && len(rsp) >= 2 {
@@ -418,34 +311,25 @@ func detectCardType(card *scard.Card, cardInfo *Card) {
 				cardInfo.Size = 48
 				cardInfo.Writable = true
 				return
-			case 0x12: // 144 bytes -> NTAG213 (requires GET_VERSION confirmation)
-				if getVersionSucceeded {
-					cardInfo.Type = "NTAG213"
-					cardInfo.Size = 180
-				} else {
-					cardInfo.Type = "MIFARE Ultralight"
-					cardInfo.Size = 64
-				}
+			case 0x12: // 144 bytes -> NTAG213
+				// CC size 0x12 is too large for plain Ultralight (48 bytes max)
+				// so this must be NTAG213 regardless of GET_VERSION result
+				cardInfo.Type = "NTAG213"
+				cardInfo.Size = 180
 				cardInfo.Writable = true
 				return
-			case 0x3E: // 496 bytes -> NTAG215 (requires GET_VERSION confirmation)
-				if getVersionSucceeded {
-					cardInfo.Type = "NTAG215"
-					cardInfo.Size = 504
-				} else {
-					cardInfo.Type = "MIFARE Ultralight"
-					cardInfo.Size = 64
-				}
+			case 0x3E: // 496 bytes -> NTAG215
+				// CC size 0x3E is too large for plain Ultralight (64 bytes max)
+				// so this must be NTAG215 regardless of GET_VERSION result
+				cardInfo.Type = "NTAG215"
+				cardInfo.Size = 504
 				cardInfo.Writable = true
 				return
-			case 0x6D: // 872 bytes -> NTAG216 (requires GET_VERSION confirmation)
-				if getVersionSucceeded {
-					cardInfo.Type = "NTAG216"
-					cardInfo.Size = 888
-				} else {
-					cardInfo.Type = "MIFARE Ultralight"
-					cardInfo.Size = 64
-				}
+			case 0x6D: // 872 bytes -> NTAG216
+				// CC size 0x6D is too large for plain Ultralight (64 bytes max)
+				// so this must be NTAG216 regardless of GET_VERSION result
+				cardInfo.Type = "NTAG216"
+				cardInfo.Size = 888
 				cardInfo.Writable = true
 				return
 			}
@@ -473,34 +357,25 @@ func detectCardType(card *scard.Card, cardInfo *Card) {
 				cardInfo.Size = 48
 				cardInfo.Writable = true
 				return
-			case 0x12: // 144 bytes -> NTAG213 (requires GET_VERSION confirmation)
-				if getVersionSucceeded {
-					cardInfo.Type = "NTAG213"
-					cardInfo.Size = 180
-				} else {
-					cardInfo.Type = "MIFARE Ultralight"
-					cardInfo.Size = 64
-				}
+			case 0x12: // 144 bytes -> NTAG213
+				// CC size 0x12 is too large for plain Ultralight (48 bytes max)
+				// so this must be NTAG213 regardless of GET_VERSION result
+				cardInfo.Type = "NTAG213"
+				cardInfo.Size = 180
 				cardInfo.Writable = true
 				return
-			case 0x3E: // 496 bytes -> NTAG215 (requires GET_VERSION confirmation)
-				if getVersionSucceeded {
-					cardInfo.Type = "NTAG215"
-					cardInfo.Size = 504
-				} else {
-					cardInfo.Type = "MIFARE Ultralight"
-					cardInfo.Size = 64
-				}
+			case 0x3E: // 496 bytes -> NTAG215
+				// CC size 0x3E is too large for plain Ultralight (64 bytes max)
+				// so this must be NTAG215 regardless of GET_VERSION result
+				cardInfo.Type = "NTAG215"
+				cardInfo.Size = 504
 				cardInfo.Writable = true
 				return
-			case 0x6D: // 872 bytes -> NTAG216 (requires GET_VERSION confirmation)
-				if getVersionSucceeded {
-					cardInfo.Type = "NTAG216"
-					cardInfo.Size = 888
-				} else {
-					cardInfo.Type = "MIFARE Ultralight"
-					cardInfo.Size = 64
-				}
+			case 0x6D: // 872 bytes -> NTAG216
+				// CC size 0x6D is too large for plain Ultralight (64 bytes max)
+				// so this must be NTAG216 regardless of GET_VERSION result
+				cardInfo.Type = "NTAG216"
+				cardInfo.Size = 888
 				cardInfo.Writable = true
 				return
 			}
@@ -976,31 +851,55 @@ func writeNTAGPages(card *scard.Card, startPage int, data []byte) error {
 		pageNum := startPage + (i / 4)
 		pageData := data[i : i+4]
 
-		// Try Method 1: Standard UPDATE BINARY command (works on most readers)
+		// Method 0: Raw NTAG WRITE command - some readers pass through raw NFC commands
+		// Format: A2 [page] [4 bytes data]
+		rawCmd := []byte{0xA2, byte(pageNum)}
+		rawCmd = append(rawCmd, pageData...)
+		rsp, err := card.Transmit(rawCmd)
+		if err == nil && len(rsp) >= 1 {
+			// NTAG write returns ACK (0x0A) on success
+			if rsp[0] == 0x0A || (len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 && rsp[len(rsp)-1] == 0x00) {
+				logging.Debug(logging.CatCard, "NDEF page written", map[string]any{
+					"page":   pageNum,
+					"data":   hex.EncodeToString(pageData),
+					"method": 0,
+				})
+				continue // Success, next page
+			}
+		}
+
+		// Method 1: Standard UPDATE BINARY command (works on most readers including ACR1252U)
 		// APDU: FF D6 00 [page] 04 [4 bytes]
 		writeCmd := []byte{0xFF, 0xD6, 0x00, byte(pageNum), 0x04}
 		writeCmd = append(writeCmd, pageData...)
-
-		rsp, err := card.Transmit(writeCmd)
+		rsp, err = card.Transmit(writeCmd)
+		logging.Debug(logging.CatCard, "NDEF write method 1", map[string]any{
+			"page":     pageNum,
+			"cmd":      hex.EncodeToString(writeCmd),
+			"response": hex.EncodeToString(rsp),
+			"err":      fmt.Sprintf("%v", err),
+		})
 		if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 && rsp[len(rsp)-1] == 0x00 {
+			logging.Debug(logging.CatCard, "NDEF page written", map[string]any{
+				"page":   pageNum,
+				"data":   hex.EncodeToString(pageData),
+				"method": 1,
+			})
 			continue // Success, next page
 		}
 
-		// Method 1 failed, try Method 2: ACR122U InCommunicateThru
-		// Uses pseudo-APDU to send raw NTAG WRITE command (0xA2)
-		// Format: FF 00 00 00 [len] D4 42 A2 [page] [4 bytes]
-		// Length = 2 (D4 42) + 1 (A2) + 1 (page) + 4 (data) = 8 bytes
+		// Method 2: ACR122U InCommunicateThru with native WRITE command (0xA2)
+		// Format: FF 00 00 00 08 D4 42 A2 [page] [4 bytes data]
 		directCmd := []byte{0xFF, 0x00, 0x00, 0x00, 0x08, 0xD4, 0x42, 0xA2, byte(pageNum)}
 		directCmd = append(directCmd, pageData...)
-
 		rsp, err = card.Transmit(directCmd)
-		if err != nil {
-			return fmt.Errorf("failed to write page %d: %w", pageNum, err)
-		}
-
-		// ACR122U returns D5 43 00 90 00 on success
-		// Check for success
-		if len(rsp) >= 2 {
+		logging.Debug(logging.CatCard, "NDEF write method 2", map[string]any{
+			"page":     pageNum,
+			"cmd":      hex.EncodeToString(directCmd),
+			"response": hex.EncodeToString(rsp),
+			"err":      fmt.Sprintf("%v", err),
+		})
+		if err == nil && len(rsp) >= 2 {
 			sw1, sw2 := rsp[len(rsp)-2], rsp[len(rsp)-1]
 			if sw1 == 0x90 && sw2 == 0x00 {
 				// Check inner status if present (D5 43 XX format)
@@ -1009,12 +908,70 @@ func writeNTAGPages(card *scard.Card, startPage int, data []byte) error {
 						return fmt.Errorf("write failed at page %d: card error %02X", pageNum, rsp[2])
 					}
 				}
-				continue // Success
+				logging.Debug(logging.CatCard, "NDEF page written", map[string]any{
+					"page":   pageNum,
+					"data":   hex.EncodeToString(pageData),
+					"method": 2,
+				})
+				continue // Success, next page
 			}
-			return fmt.Errorf("write failed at page %d with status: %02X %02X", pageNum, sw1, sw2)
 		}
 
-		return fmt.Errorf("write failed at page %d: invalid response", pageNum)
+		// Method 3: ACR1552 Transparent Exchange with native WRITE command (0xA2)
+		// Requires: start session, set protocol, send command, end session
+		startSession := []byte{0xFF, 0xC2, 0x00, 0x00, 0x02, 0x81, 0x00}
+		setProtocol := []byte{0xFF, 0xC2, 0x00, 0x02, 0x04, 0x8F, 0x02, 0x00, 0x03}
+		endSession := []byte{0xFF, 0xC2, 0x00, 0x00, 0x02, 0x82, 0x00}
+
+		// End any stale session first (ignore result)
+		card.Transmit(endSession)
+
+		rsp, err = card.Transmit(startSession)
+		logging.Debug(logging.CatCard, "NDEF write method 3 - start session", map[string]any{
+			"page":     pageNum,
+			"response": hex.EncodeToString(rsp),
+			"err":      fmt.Sprintf("%v", err),
+		})
+		if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+			// Set protocol to ISO 14443-A Layer 3
+			rsp, err = card.Transmit(setProtocol)
+			logging.Debug(logging.CatCard, "NDEF write method 3 - set protocol", map[string]any{
+				"page":     pageNum,
+				"response": hex.EncodeToString(rsp),
+				"err":      fmt.Sprintf("%v", err),
+			})
+			if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+				// Build transparent write command: A2 [page] [4 bytes]
+				writeData := []byte{0xA2, byte(pageNum)}
+				writeData = append(writeData, pageData...)
+				// Wrap in transparent exchange: FF C2 00 01 [len+2] 95 [len] [data]
+				transparentCmd := []byte{0xFF, 0xC2, 0x00, 0x01, byte(len(writeData) + 2), 0x95, byte(len(writeData))}
+				transparentCmd = append(transparentCmd, writeData...)
+
+				rsp, err = card.Transmit(transparentCmd)
+				logging.Debug(logging.CatCard, "NDEF write method 3 - write cmd", map[string]any{
+					"page":     pageNum,
+					"cmd":      hex.EncodeToString(transparentCmd),
+					"response": hex.EncodeToString(rsp),
+					"err":      fmt.Sprintf("%v", err),
+				})
+				card.Transmit(endSession) // Always end session
+
+				// Check for success - response contains status in TLV format
+				if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+					logging.Debug(logging.CatCard, "NDEF page written", map[string]any{
+						"page":   pageNum,
+						"data":   hex.EncodeToString(pageData),
+						"method": 3,
+					})
+					continue // Success, next page
+				}
+			} else {
+				card.Transmit(endSession)
+			}
+		}
+
+		return fmt.Errorf("write failed at page %d: no supported method worked", pageNum)
 	}
 
 	return nil
@@ -2070,22 +2027,74 @@ func ReadUltralightPage(readerName string, page int, password []byte) ([]byte, e
 		}
 	}
 
-	// Read page: FF B0 00 [page] 10 (reads 16 bytes = 4 pages, we take first 4)
+	// Method 1: Standard READ BINARY command (works on most readers including ACR1252U)
+	// APDU: FF B0 00 [page] 10 (reads 16 bytes = 4 pages)
 	readCmd := []byte{0xFF, 0xB0, 0x00, byte(page), 0x10}
 	rsp, err := card.Transmit(readCmd)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read page %d: %w", page, err)
-	}
-	if len(rsp) < 6 || rsp[len(rsp)-2] != 0x90 {
-		return nil, fmt.Errorf("read failed for page %d: status %02X %02X", page, rsp[len(rsp)-2], rsp[len(rsp)-1])
+	if err == nil && len(rsp) >= 6 && rsp[len(rsp)-2] == 0x90 && rsp[len(rsp)-1] == 0x00 {
+		logging.Info(logging.CatCard, "Ultralight page read", map[string]any{
+			"page":   page,
+			"data":   hex.EncodeToString(rsp[:4]),
+			"method": 1,
+		})
+		return rsp[:4], nil
 	}
 
-	logging.Info(logging.CatCard, "Ultralight page read", map[string]any{
-		"page": page,
-		"data": hex.EncodeToString(rsp[:4]),
-	})
+	// Method 2: ACR122U InCommunicateThru with native READ command (0x30)
+	// Format: FF 00 00 00 04 D4 42 30 [page]
+	directCmd := []byte{0xFF, 0x00, 0x00, 0x00, 0x04, 0xD4, 0x42, 0x30, byte(page)}
+	rsp, err = card.Transmit(directCmd)
+	if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 && rsp[len(rsp)-1] == 0x00 {
+		if len(rsp) >= 19 && rsp[0] == 0xD5 && rsp[1] == 0x43 && rsp[2] == 0x00 {
+			logging.Info(logging.CatCard, "Ultralight page read", map[string]any{
+				"page":   page,
+				"data":   hex.EncodeToString(rsp[3:7]),
+				"method": 2,
+			})
+			return rsp[3:7], nil
+		}
+	}
 
-	return rsp[:4], nil
+	// Method 3: ACR1552 Transparent Exchange with native READ command (0x30)
+	// Requires: start session, set protocol, send command, end session
+	startSession := []byte{0xFF, 0xC2, 0x00, 0x00, 0x02, 0x81, 0x00}
+	setProtocol := []byte{0xFF, 0xC2, 0x00, 0x02, 0x04, 0x8F, 0x02, 0x00, 0x03}
+	endSession := []byte{0xFF, 0xC2, 0x00, 0x00, 0x02, 0x82, 0x00}
+
+	rsp, err = card.Transmit(startSession)
+	if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+		// Set protocol to ISO 14443-A Layer 3
+		rsp, err = card.Transmit(setProtocol)
+		if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+			// Native READ command: 30 [page]
+			transparentCmd := []byte{0xFF, 0xC2, 0x00, 0x01, 0x04, 0x95, 0x02, 0x30, byte(page)}
+			rsp, err = card.Transmit(transparentCmd)
+			card.Transmit(endSession) // Always end session
+
+			// Response contains data in TLV format with tag 0x97
+			// Parse to find the 16 bytes of page data
+			if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+				// Look for tag 0x97 containing the read data
+				for i := 0; i < len(rsp)-2; i++ {
+					if rsp[i] == 0x97 && i+1 < len(rsp) {
+						tagLen := int(rsp[i+1])
+						if i+2+tagLen <= len(rsp) && tagLen >= 4 {
+							logging.Info(logging.CatCard, "Ultralight page read", map[string]any{
+								"page":   page,
+								"data":   hex.EncodeToString(rsp[i+2 : i+2+4]),
+								"method": 3,
+							})
+							return rsp[i+2 : i+2+4], nil
+						}
+					}
+				}
+			}
+		} else {
+			card.Transmit(endSession)
+		}
+	}
+
+	return nil, fmt.Errorf("read failed for page %d: no supported method worked", page)
 }
 
 // WriteUltralightPage writes 4 bytes to a MIFARE Ultralight page.
@@ -2122,23 +2131,264 @@ func WriteUltralightPage(readerName string, page int, data []byte, password []by
 		}
 	}
 
-	// Write page: FF D6 00 [page] 04 [4-byte data]
+	// Method 0: Raw NTAG WRITE command - some readers pass through raw NFC commands
+	// Format: A2 [page] [4 bytes data]
+	rawCmd := []byte{0xA2, byte(page)}
+	rawCmd = append(rawCmd, data...)
+	rsp, err := card.Transmit(rawCmd)
+	if err == nil && len(rsp) >= 1 {
+		// NTAG write returns ACK (0x0A) on success
+		if rsp[0] == 0x0A || (len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 && rsp[len(rsp)-1] == 0x00) {
+			logging.Info(logging.CatCard, "Ultralight page written", map[string]any{
+				"page":   page,
+				"data":   hex.EncodeToString(data),
+				"method": 0,
+			})
+			return nil
+		}
+	}
+
+	// Method 1: Standard UPDATE BINARY command (works on most readers including ACR1252U)
+	// APDU: FF D6 00 [page] 04 [4 bytes]
 	writeCmd := []byte{0xFF, 0xD6, 0x00, byte(page), 0x04}
 	writeCmd = append(writeCmd, data...)
-	rsp, err := card.Transmit(writeCmd)
-	if err != nil {
-		return fmt.Errorf("failed to write page %d: %w", page, err)
-	}
-	if len(rsp) < 2 || rsp[len(rsp)-2] != 0x90 {
-		return fmt.Errorf("write failed for page %d: status %02X %02X", page, rsp[len(rsp)-2], rsp[len(rsp)-1])
-	}
-
-	logging.Info(logging.CatCard, "Ultralight page written", map[string]any{
-		"page": page,
-		"data": hex.EncodeToString(data),
+	rsp, err = card.Transmit(writeCmd)
+	logging.Debug(logging.CatCard, "Ultralight write method 1", map[string]any{
+		"page":     page,
+		"cmd":      hex.EncodeToString(writeCmd),
+		"response": hex.EncodeToString(rsp),
+		"err":      fmt.Sprintf("%v", err),
 	})
+	if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 && rsp[len(rsp)-1] == 0x00 {
+		logging.Info(logging.CatCard, "Ultralight page written", map[string]any{
+			"page":   page,
+			"data":   hex.EncodeToString(data),
+			"method": 1,
+		})
+		return nil
+	}
 
-	return nil
+	// Method 2: ACR122U InCommunicateThru with native WRITE command (0xA2)
+	// Format: FF 00 00 00 08 D4 42 A2 [page] [4 bytes data]
+	directCmd := []byte{0xFF, 0x00, 0x00, 0x00, 0x08, 0xD4, 0x42, 0xA2, byte(page)}
+	directCmd = append(directCmd, data...)
+	rsp, err = card.Transmit(directCmd)
+	logging.Debug(logging.CatCard, "Ultralight write method 2", map[string]any{
+		"page":     page,
+		"cmd":      hex.EncodeToString(directCmd),
+		"response": hex.EncodeToString(rsp),
+		"err":      fmt.Sprintf("%v", err),
+	})
+	if err == nil && len(rsp) >= 2 {
+		sw1, sw2 := rsp[len(rsp)-2], rsp[len(rsp)-1]
+		if sw1 == 0x90 && sw2 == 0x00 {
+			// Check inner status if present (D5 43 XX format)
+			if len(rsp) >= 3 && rsp[0] == 0xD5 && rsp[1] == 0x43 {
+				if rsp[2] != 0x00 {
+					return fmt.Errorf("write failed for page %d: card error %02X", page, rsp[2])
+				}
+			}
+			logging.Info(logging.CatCard, "Ultralight page written", map[string]any{
+				"page":   page,
+				"data":   hex.EncodeToString(data),
+				"method": 2,
+			})
+			return nil
+		}
+	}
+
+	// Method 3: ACR1552 Transparent Exchange with native WRITE command (0xA2)
+	// Requires: start session, set protocol, send command, end session
+	startSession := []byte{0xFF, 0xC2, 0x00, 0x00, 0x02, 0x81, 0x00}
+	setProtocol := []byte{0xFF, 0xC2, 0x00, 0x02, 0x04, 0x8F, 0x02, 0x00, 0x03}
+	endSession := []byte{0xFF, 0xC2, 0x00, 0x00, 0x02, 0x82, 0x00}
+
+	// End any stale session first (ignore result)
+	card.Transmit(endSession)
+
+	rsp, err = card.Transmit(startSession)
+	logging.Debug(logging.CatCard, "Ultralight write method 3 - start session", map[string]any{
+		"response": hex.EncodeToString(rsp),
+		"err":      fmt.Sprintf("%v", err),
+	})
+	if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+		// Set protocol to ISO 14443-A Layer 3
+		rsp, err = card.Transmit(setProtocol)
+		logging.Debug(logging.CatCard, "Ultralight write method 3 - set protocol", map[string]any{
+			"response": hex.EncodeToString(rsp),
+			"err":      fmt.Sprintf("%v", err),
+		})
+		if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+			// Build transparent write command: A2 [page] [4 bytes]
+			writeData := []byte{0xA2, byte(page)}
+			writeData = append(writeData, data...)
+			// Wrap in transparent exchange: FF C2 00 01 [len+2] 95 [len] [data]
+			transparentCmd := []byte{0xFF, 0xC2, 0x00, 0x01, byte(len(writeData) + 2), 0x95, byte(len(writeData))}
+			transparentCmd = append(transparentCmd, writeData...)
+
+			rsp, err = card.Transmit(transparentCmd)
+			logging.Debug(logging.CatCard, "Ultralight write method 3 - write cmd", map[string]any{
+				"cmd":      hex.EncodeToString(transparentCmd),
+				"response": hex.EncodeToString(rsp),
+				"err":      fmt.Sprintf("%v", err),
+			})
+			card.Transmit(endSession) // Always end session
+
+			// Check for success - response contains status in TLV format
+			if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+				logging.Info(logging.CatCard, "Ultralight page written", map[string]any{
+					"page":   page,
+					"data":   hex.EncodeToString(data),
+					"method": 3,
+				})
+				return nil
+			}
+		} else {
+			card.Transmit(endSession)
+		}
+	}
+
+	return fmt.Errorf("write failed for page %d: no supported method worked", page)
+}
+
+// UltralightPageWrite represents a single page write operation.
+type UltralightPageWrite struct {
+	Page int    `json:"page"`
+	Data []byte `json:"data"`
+}
+
+// UltralightWriteResult represents the result of a single page write.
+type UltralightWriteResult struct {
+	Page    int    `json:"page"`
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+// WriteUltralightPages writes multiple pages to a MIFARE Ultralight / NTAG card
+// in a single card session. This is more efficient and reliable than multiple
+// individual WriteUltralightPage calls.
+func WriteUltralightPages(readerName string, pages []UltralightPageWrite, password []byte) ([]UltralightWriteResult, error) {
+	if len(pages) == 0 {
+		return nil, fmt.Errorf("no pages to write")
+	}
+
+	// Validate all pages before connecting
+	for _, p := range pages {
+		if p.Page < 0 || p.Page > 255 {
+			return nil, fmt.Errorf("invalid page number: %d (must be 0-255)", p.Page)
+		}
+		if p.Page < 4 {
+			return nil, fmt.Errorf("cannot write to system pages 0-3 (page %d)", p.Page)
+		}
+		if len(p.Data) != 4 {
+			return nil, fmt.Errorf("page %d: data must be exactly 4 bytes, got %d", p.Page, len(p.Data))
+		}
+	}
+
+	ctx, err := scard.EstablishContext()
+	if err != nil {
+		return nil, fmt.Errorf("failed to establish context: %w", err)
+	}
+	defer ctx.Release()
+
+	card, err := ctx.Connect(readerName, scard.ShareShared, scard.ProtocolAny)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to reader: %w", err)
+	}
+	defer card.Disconnect(scard.LeaveCard)
+
+	// Authenticate with password if provided (for Ultralight EV1)
+	if len(password) > 0 {
+		if err := authenticateUltralight(card, password); err != nil {
+			return nil, err
+		}
+	}
+
+	results := make([]UltralightWriteResult, len(pages))
+
+	for i, p := range pages {
+		results[i].Page = p.Page
+
+		// Try Method 1: Standard UPDATE BINARY (works on most readers)
+		writeCmd := []byte{0xFF, 0xD6, 0x00, byte(p.Page), 0x04}
+		writeCmd = append(writeCmd, p.Data...)
+		rsp, err := card.Transmit(writeCmd)
+
+		if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 && rsp[len(rsp)-1] == 0x00 {
+			results[i].Success = true
+			logging.Info(logging.CatCard, "Ultralight page written (batch)", map[string]any{
+				"page": p.Page,
+				"data": hex.EncodeToString(p.Data),
+			})
+			continue
+		}
+
+		// Try Method 2: ACR122U InCommunicateThru
+		directCmd := []byte{0xFF, 0x00, 0x00, 0x00, 0x08, 0xD4, 0x42, 0xA2, byte(p.Page)}
+		directCmd = append(directCmd, p.Data...)
+		rsp, err = card.Transmit(directCmd)
+
+		if err == nil && len(rsp) >= 2 {
+			sw1, sw2 := rsp[len(rsp)-2], rsp[len(rsp)-1]
+			if sw1 == 0x90 && sw2 == 0x00 {
+				if len(rsp) >= 3 && rsp[0] == 0xD5 && rsp[1] == 0x43 && rsp[2] != 0x00 {
+					results[i].Error = fmt.Sprintf("card error %02X", rsp[2])
+					continue
+				}
+				results[i].Success = true
+				logging.Info(logging.CatCard, "Ultralight page written (batch)", map[string]any{
+					"page": p.Page,
+					"data": hex.EncodeToString(p.Data),
+				})
+				continue
+			}
+		}
+
+		// Try Method 3: ACR1552 Transparent Exchange with native WRITE command (0xA2)
+		startSession := []byte{0xFF, 0xC2, 0x00, 0x00, 0x02, 0x81, 0x00}
+		setProtocol := []byte{0xFF, 0xC2, 0x00, 0x02, 0x04, 0x8F, 0x02, 0x00, 0x03}
+		endSession := []byte{0xFF, 0xC2, 0x00, 0x00, 0x02, 0x82, 0x00}
+
+		// End any stale session first (ignore result)
+		card.Transmit(endSession)
+
+		rsp, err = card.Transmit(startSession)
+		if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+			rsp, err = card.Transmit(setProtocol)
+			if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+				// Build transparent write command: A2 [page] [4 bytes]
+				writeData := []byte{0xA2, byte(p.Page)}
+				writeData = append(writeData, p.Data...)
+				// Wrap in transparent exchange: FF C2 00 01 [len+2] 95 [len] [data]
+				transparentCmd := []byte{0xFF, 0xC2, 0x00, 0x01, byte(len(writeData) + 2), 0x95, byte(len(writeData))}
+				transparentCmd = append(transparentCmd, writeData...)
+
+				rsp, err = card.Transmit(transparentCmd)
+				card.Transmit(endSession) // Always end session
+
+				if err == nil && len(rsp) >= 2 && rsp[len(rsp)-2] == 0x90 {
+					results[i].Success = true
+					logging.Info(logging.CatCard, "Ultralight page written (batch)", map[string]any{
+						"page":   p.Page,
+						"data":   hex.EncodeToString(p.Data),
+						"method": 3,
+					})
+					continue
+				}
+			} else {
+				card.Transmit(endSession)
+			}
+		}
+
+		// All methods failed
+		if err != nil {
+			results[i].Error = err.Error()
+		} else {
+			results[i].Error = fmt.Sprintf("write failed: status %02X %02X", rsp[len(rsp)-2], rsp[len(rsp)-1])
+		}
+	}
+
+	return results, nil
 }
 
 // authenticateUltralight performs PWD_AUTH on Ultralight EV1 cards.
@@ -2162,5 +2412,240 @@ func authenticateUltralight(card *scard.Card, password []byte) error {
 	}
 
 	logging.Debug(logging.CatCard, "Ultralight authenticated", nil)
+	return nil
+}
+
+// aesECBEncrypt performs AES-128-ECB encryption on a single 16-byte block.
+// Both key and data must be exactly 16 bytes.
+func aesECBEncrypt(key, data []byte) ([]byte, error) {
+	if len(key) != 16 {
+		return nil, fmt.Errorf("AES key must be 16 bytes, got %d", len(key))
+	}
+	if len(data) != 16 {
+		return nil, fmt.Errorf("data must be 16 bytes, got %d", len(data))
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
+	}
+
+	encrypted := make([]byte, 16)
+	block.Encrypt(encrypted, data)
+
+	return encrypted, nil
+}
+
+// DeriveUIDKeyAES derives a 6-byte MIFARE sector key from the card's UID using AES-128-ECB.
+// The algorithm:
+//  1. Get 4-byte UID from card
+//  2. Expand to 16 bytes by repeating: [uid0,uid1,uid2,uid3,uid0,uid1,uid2,uid3,...]
+//  3. AES-128-ECB encrypt with the provided key
+//  4. Return first 6 bytes as the derived MIFARE key
+//
+// aesKey must be exactly 16 bytes (the AES-128 encryption key).
+func DeriveUIDKeyAES(readerName string, aesKey []byte) ([]byte, error) {
+	if len(aesKey) != 16 {
+		return nil, fmt.Errorf("AES key must be 16 bytes, got %d", len(aesKey))
+	}
+
+	ctx, err := scard.EstablishContext()
+	if err != nil {
+		return nil, fmt.Errorf("failed to establish context: %w", err)
+	}
+	defer ctx.Release()
+
+	card, err := ctx.Connect(readerName, scard.ShareShared, scard.ProtocolAny)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to reader: %w", err)
+	}
+	defer card.Disconnect(scard.LeaveCard)
+
+	// Get UID using standard command: FF CA 00 00 00
+	getUIDCmd := []byte{0xFF, 0xCA, 0x00, 0x00, 0x00}
+	rsp, err := card.Transmit(getUIDCmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get UID: %w", err)
+	}
+
+	if len(rsp) < 2 || rsp[len(rsp)-2] != 0x90 || rsp[len(rsp)-1] != 0x00 {
+		return nil, fmt.Errorf("get UID failed with status: %02X %02X", rsp[len(rsp)-2], rsp[len(rsp)-1])
+	}
+
+	uid := rsp[:len(rsp)-2]
+	if len(uid) != 4 {
+		return nil, fmt.Errorf("expected 4-byte UID for key derivation, got %d bytes", len(uid))
+	}
+
+	// Expand UID to 16 bytes by repeating
+	expandedUID := make([]byte, 16)
+	for i := 0; i < 16; i++ {
+		expandedUID[i] = uid[i%4]
+	}
+
+	// AES-ECB encrypt
+	encrypted, err := aesECBEncrypt(aesKey, expandedUID)
+	if err != nil {
+		return nil, fmt.Errorf("AES encryption failed: %w", err)
+	}
+
+	// Return first 6 bytes as the MIFARE key
+	derivedKey := encrypted[:6]
+
+	logging.Info(logging.CatCard, "Derived UID key via AES", map[string]any{
+		"uid": hex.EncodeToString(uid),
+		"key": hex.EncodeToString(derivedKey),
+	})
+
+	return derivedKey, nil
+}
+
+// AESEncryptAndWriteBlock encrypts 16 bytes with AES-128-ECB and writes to a MIFARE Classic block.
+// data: 16 bytes of plaintext data to encrypt and write
+// aesKey: 16-byte AES encryption key
+// authKey: 6-byte MIFARE sector authentication key
+// authKeyType: 'A' or 'B' (defaults to 'A')
+func AESEncryptAndWriteBlock(readerName string, block int, data, aesKey, authKey []byte, authKeyType byte) error {
+	if len(data) != 16 {
+		return fmt.Errorf("data must be exactly 16 bytes, got %d", len(data))
+	}
+	if len(aesKey) != 16 {
+		return fmt.Errorf("AES key must be 16 bytes, got %d", len(aesKey))
+	}
+	if block < 0 || block > 255 {
+		return fmt.Errorf("invalid block number: %d (must be 0-255)", block)
+	}
+	if isSectorTrailer(block) {
+		return fmt.Errorf("cannot write to sector trailer block %d", block)
+	}
+
+	// AES-ECB encrypt the data
+	encrypted, err := aesECBEncrypt(aesKey, data)
+	if err != nil {
+		return fmt.Errorf("AES encryption failed: %w", err)
+	}
+
+	ctx, err := scard.EstablishContext()
+	if err != nil {
+		return fmt.Errorf("failed to establish context: %w", err)
+	}
+	defer ctx.Release()
+
+	card, err := ctx.Connect(readerName, scard.ShareShared, scard.ProtocolAny)
+	if err != nil {
+		return fmt.Errorf("failed to connect to reader: %w", err)
+	}
+	defer card.Disconnect(scard.LeaveCard)
+
+	// Convert key type character to APDU byte
+	var keyTypeByte byte = 0x60 // Default Key A
+	if authKeyType == 'B' || authKeyType == 'b' || authKeyType == 0x61 {
+		keyTypeByte = 0x61
+	}
+
+	// Authenticate to sector
+	if err := authenticateMifareBlock(card, block, authKey, keyTypeByte); err != nil {
+		return fmt.Errorf("authentication failed: %w", err)
+	}
+
+	// Write encrypted data: FF D6 00 [block] 10 [16 bytes]
+	writeCmd := []byte{0xFF, 0xD6, 0x00, byte(block), 0x10}
+	writeCmd = append(writeCmd, encrypted...)
+	rsp, err := card.Transmit(writeCmd)
+	if err != nil {
+		return fmt.Errorf("failed to write block %d: %w", block, err)
+	}
+	if len(rsp) < 2 || rsp[len(rsp)-2] != 0x90 {
+		return fmt.Errorf("write failed for block %d: status %02X %02X", block, rsp[len(rsp)-2], rsp[len(rsp)-1])
+	}
+
+	logging.Info(logging.CatCard, "AES encrypted block written", map[string]any{
+		"block":     block,
+		"plaintext": hex.EncodeToString(data),
+		"encrypted": hex.EncodeToString(encrypted),
+	})
+
+	return nil
+}
+
+// WriteSectorTrailer updates a MIFARE Classic sector trailer with new keys while preserving access bits.
+// Unlike WriteMifareBlock, this function is specifically designed for sector trailer writes.
+// block: Must be a sector trailer (3, 7, 11, 15, ... for 1K; or 127+16n+15 for 4K large sectors)
+// keyA: New 6-byte Key A
+// keyB: New 6-byte Key B
+// authKey: 6-byte key for authentication to the sector
+// authKeyType: 'A' or 'B' (defaults to 'A')
+func WriteSectorTrailer(readerName string, block int, keyA, keyB, authKey []byte, authKeyType byte) error {
+	if !isSectorTrailer(block) {
+		return fmt.Errorf("block %d is not a sector trailer", block)
+	}
+	if len(keyA) != 6 {
+		return fmt.Errorf("keyA must be 6 bytes, got %d", len(keyA))
+	}
+	if len(keyB) != 6 {
+		return fmt.Errorf("keyB must be 6 bytes, got %d", len(keyB))
+	}
+
+	ctx, err := scard.EstablishContext()
+	if err != nil {
+		return fmt.Errorf("failed to establish context: %w", err)
+	}
+	defer ctx.Release()
+
+	card, err := ctx.Connect(readerName, scard.ShareShared, scard.ProtocolAny)
+	if err != nil {
+		return fmt.Errorf("failed to connect to reader: %w", err)
+	}
+	defer card.Disconnect(scard.LeaveCard)
+
+	// Convert auth key type character to APDU byte
+	var keyTypeByte byte = 0x60 // Default Key A
+	if authKeyType == 'B' || authKeyType == 'b' || authKeyType == 0x61 {
+		keyTypeByte = 0x61
+	}
+
+	// Authenticate with provided key
+	if err := authenticateMifareBlock(card, block, authKey, keyTypeByte); err != nil {
+		return fmt.Errorf("authentication failed: %w", err)
+	}
+
+	// Read current sector trailer to get access bits
+	readCmd := []byte{0xFF, 0xB0, 0x00, byte(block), 0x10}
+	rsp, err := card.Transmit(readCmd)
+	if err != nil {
+		return fmt.Errorf("failed to read sector trailer: %w", err)
+	}
+	if len(rsp) < 18 || rsp[len(rsp)-2] != 0x90 {
+		return fmt.Errorf("read failed for sector trailer: status %02X %02X", rsp[len(rsp)-2], rsp[len(rsp)-1])
+	}
+
+	// Extract access bits (bytes 6-9 of the 16-byte sector trailer)
+	// Sector trailer format: [KeyA (6)] [Access bits (4)] [KeyB (6)]
+	accessBits := rsp[6:10]
+
+	// Build new sector trailer: [newKeyA (6)] + [accessBits (4)] + [newKeyB (6)]
+	newTrailer := make([]byte, 16)
+	copy(newTrailer[0:6], keyA)
+	copy(newTrailer[6:10], accessBits)
+	copy(newTrailer[10:16], keyB)
+
+	// Write new sector trailer
+	writeCmd := []byte{0xFF, 0xD6, 0x00, byte(block), 0x10}
+	writeCmd = append(writeCmd, newTrailer...)
+	rsp, err = card.Transmit(writeCmd)
+	if err != nil {
+		return fmt.Errorf("failed to write sector trailer: %w", err)
+	}
+	if len(rsp) < 2 || rsp[len(rsp)-2] != 0x90 {
+		return fmt.Errorf("write failed for sector trailer: status %02X %02X", rsp[len(rsp)-2], rsp[len(rsp)-1])
+	}
+
+	logging.Info(logging.CatCard, "Sector trailer updated", map[string]any{
+		"block":      block,
+		"keyA":       hex.EncodeToString(keyA),
+		"keyB":       hex.EncodeToString(keyB),
+		"accessBits": hex.EncodeToString(accessBits),
+	})
+
 	return nil
 }

@@ -38,6 +38,19 @@ export type {
   HealthInfo,
   CardDetectedEvent,
   CardRemovedEvent,
+  // Ultralight types
+  UltralightPageData,
+  UltralightReadOptions,
+  UltralightWriteOptions,
+  UltralightBatchWriteOptions,
+  UltralightBatchWriteResult,
+  UltralightPageWriteOp,
+  UltralightPageWriteResult,
+  // AES MIFARE Classic types
+  DerivedKeyData,
+  DeriveUIDKeyOptions,
+  AESEncryptWriteOptions,
+  UpdateSectorTrailerOptions,
 } from './types.js';
 
 // Convenience aliases for CDN/browser usage

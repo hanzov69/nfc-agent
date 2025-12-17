@@ -130,7 +130,11 @@ export type WSMessageType =
   | 'read_mifare_block'
   | 'write_mifare_block'
   | 'read_ultralight_page'
-  | 'write_ultralight_page';
+  | 'write_ultralight_page'
+  | 'write_ultralight_pages'
+  | 'derive_uid_key_aes'
+  | 'aes_encrypt_and_write_block'
+  | 'update_sector_trailer_keys';
 
 /**
  * WebSocket event types (server push)
@@ -392,4 +396,137 @@ export interface WriteUltralightPagePayload {
   page: number;
   data: string;
   password?: string;
+}
+
+/**
+ * A single page write operation for batch writes
+ */
+export interface UltralightPageWriteOp {
+  /** Page number (4-255 for user data) */
+  page: number;
+  /** Page data as hex string (8 characters = 4 bytes) */
+  data: string;
+}
+
+/**
+ * Options for batch writing multiple MIFARE Ultralight pages
+ */
+export interface UltralightBatchWriteOptions {
+  /** Array of page write operations */
+  pages: UltralightPageWriteOp[];
+  /** Authentication password as hex string (8 characters = 4 bytes) for EV1 cards. Optional. */
+  password?: string;
+}
+
+/**
+ * Result of a single page write in a batch operation
+ */
+export interface UltralightPageWriteResult {
+  /** Page number */
+  page: number;
+  /** Whether the write succeeded */
+  success: boolean;
+  /** Error message if write failed */
+  error?: string;
+}
+
+/**
+ * Response from batch writing MIFARE Ultralight pages
+ */
+export interface UltralightBatchWriteResult {
+  /** Results for each page write */
+  results: UltralightPageWriteResult[];
+  /** Number of pages successfully written */
+  written: number;
+  /** Total number of pages attempted */
+  total: number;
+}
+
+/**
+ * Payload for write_ultralight_pages WebSocket request
+ */
+export interface WriteUltralightPagesPayload {
+  readerIndex: number;
+  pages: UltralightPageWriteOp[];
+  password?: string;
+}
+
+// ============================================================================
+// AES MIFARE Classic Types
+// ============================================================================
+
+/**
+ * Response from deriving a UID key via AES
+ */
+export interface DerivedKeyData {
+  /** Derived 6-byte MIFARE key as hex string (12 characters) */
+  key: string;
+}
+
+/**
+ * Options for deriving a UID key via AES
+ */
+export interface DeriveUIDKeyOptions {
+  /** AES-128 key as hex string (32 characters = 16 bytes) */
+  aesKey: string;
+}
+
+/**
+ * Options for AES encrypt and write block
+ */
+export interface AESEncryptWriteOptions {
+  /** Block data as hex string (32 characters = 16 bytes) - will be AES encrypted before writing */
+  data: string;
+  /** AES-128 encryption key as hex string (32 characters = 16 bytes) */
+  aesKey: string;
+  /** MIFARE authentication key as hex string (12 characters = 6 bytes) */
+  authKey: string;
+  /** Key type: 'A' or 'B' (default: 'A') */
+  authKeyType?: MifareKeyType;
+}
+
+/**
+ * Options for updating sector trailer keys
+ */
+export interface UpdateSectorTrailerOptions {
+  /** New Key A as hex string (12 characters = 6 bytes) */
+  keyA: string;
+  /** New Key B as hex string (12 characters = 6 bytes) */
+  keyB: string;
+  /** Authentication key as hex string (12 characters = 6 bytes) */
+  authKey: string;
+  /** Key type for authentication: 'A' or 'B' (default: 'A') */
+  authKeyType?: MifareKeyType;
+}
+
+/**
+ * Payload for derive_uid_key_aes WebSocket request
+ */
+export interface DeriveUIDKeyPayload {
+  readerIndex: number;
+  aesKey: string;
+}
+
+/**
+ * Payload for aes_encrypt_and_write_block WebSocket request
+ */
+export interface AESEncryptWritePayload {
+  readerIndex: number;
+  block: number;
+  data: string;
+  aesKey: string;
+  authKey: string;
+  authKeyType?: MifareKeyType;
+}
+
+/**
+ * Payload for update_sector_trailer_keys WebSocket request
+ */
+export interface UpdateSectorTrailerPayload {
+  readerIndex: number;
+  block: number;
+  keyA: string;
+  keyB: string;
+  authKey: string;
+  authKeyType?: MifareKeyType;
 }

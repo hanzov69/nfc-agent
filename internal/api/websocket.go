@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -256,6 +257,14 @@ func (c *WSClient) handleMessage(msg WSMessage) {
 		c.handleReadUltralightPage(msg.ID, msg.Payload)
 	case "write_ultralight_page":
 		c.handleWriteUltralightPage(msg.ID, msg.Payload)
+	case "write_ultralight_pages":
+		c.handleWriteUltralightPages(msg.ID, msg.Payload)
+	case "derive_uid_key_aes":
+		c.handleDeriveUIDKeyAES(msg.ID, msg.Payload)
+	case "aes_encrypt_and_write_block":
+		c.handleAESEncryptAndWriteBlock(msg.ID, msg.Payload)
+	case "update_sector_trailer_keys":
+		c.handleUpdateSectorTrailerKeys(msg.ID, msg.Payload)
 	default:
 		logging.Warn(logging.CatWebSocket, "Unknown message type", map[string]any{
 			"type": msg.Type,
@@ -854,5 +863,204 @@ func (c *WSClient) handleWriteUltralightPage(id string, payload json.RawMessage)
 	c.sendResponse(id, "ultralight_write_success", map[string]interface{}{
 		"success": true,
 		"page":    req.Page,
+	})
+}
+
+func (c *WSClient) handleWriteUltralightPages(id string, payload json.RawMessage) {
+	var req struct {
+		ReaderIndex int `json:"readerIndex"`
+		Pages       []struct {
+			Page int    `json:"page"`
+			Data string `json:"data"` // Hex string, 8 chars = 4 bytes
+		} `json:"pages"`
+		Password string `json:"password"` // Optional, hex string, 8 chars = 4 bytes
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		c.sendError(id, "invalid payload")
+		return
+	}
+
+	readers := core.ListReaders()
+	if req.ReaderIndex < 0 || req.ReaderIndex >= len(readers) {
+		c.sendError(id, "reader index out of range")
+		return
+	}
+
+	if len(req.Pages) == 0 {
+		c.sendError(id, "no pages provided")
+		return
+	}
+
+	// Convert to core types
+	pages := make([]core.UltralightPageWrite, len(req.Pages))
+	for i, p := range req.Pages {
+		data, err := hex.DecodeString(p.Data)
+		if err != nil || len(data) != 4 {
+			c.sendError(id, fmt.Sprintf("page %d: invalid data (must be 8 hex characters for 4 bytes)", p.Page))
+			return
+		}
+		pages[i] = core.UltralightPageWrite{
+			Page: p.Page,
+			Data: data,
+		}
+	}
+
+	password, err := parseUltralightPassword(req.Password)
+	if err != nil {
+		c.sendError(id, err.Error())
+		return
+	}
+
+	results, err := core.WriteUltralightPages(readers[req.ReaderIndex].Name, pages, password)
+	if err != nil {
+		c.sendError(id, err.Error())
+		return
+	}
+
+	// Count successes
+	successCount := 0
+	for _, r := range results {
+		if r.Success {
+			successCount++
+		}
+	}
+
+	c.sendResponse(id, "ultralight_write_pages_success", map[string]interface{}{
+		"results": results,
+		"written": successCount,
+		"total":   len(results),
+	})
+}
+
+func (c *WSClient) handleDeriveUIDKeyAES(id string, payload json.RawMessage) {
+	var req struct {
+		ReaderIndex int    `json:"readerIndex"`
+		AESKey      string `json:"aesKey"` // Hex string, 32 chars = 16 bytes
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		c.sendError(id, "invalid payload")
+		return
+	}
+
+	readers := core.ListReaders()
+	if req.ReaderIndex < 0 || req.ReaderIndex >= len(readers) {
+		c.sendError(id, "reader index out of range")
+		return
+	}
+
+	aesKey, err := hex.DecodeString(req.AESKey)
+	if err != nil || len(aesKey) != 16 {
+		c.sendError(id, "invalid aesKey (must be 32 hex characters for 16 bytes)")
+		return
+	}
+
+	key, err := core.DeriveUIDKeyAES(readers[req.ReaderIndex].Name, aesKey)
+	if err != nil {
+		c.sendError(id, err.Error())
+		return
+	}
+
+	c.sendResponse(id, "uid_key_derived", map[string]interface{}{
+		"key": hex.EncodeToString(key),
+	})
+}
+
+func (c *WSClient) handleAESEncryptAndWriteBlock(id string, payload json.RawMessage) {
+	var req struct {
+		ReaderIndex int    `json:"readerIndex"`
+		Block       int    `json:"block"`
+		Data        string `json:"data"`        // Hex string, 32 chars = 16 bytes
+		AESKey      string `json:"aesKey"`      // Hex string, 32 chars = 16 bytes
+		AuthKey     string `json:"authKey"`     // Hex string, 12 chars = 6 bytes
+		AuthKeyType string `json:"authKeyType"` // "A" or "B"
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		c.sendError(id, "invalid payload")
+		return
+	}
+
+	readers := core.ListReaders()
+	if req.ReaderIndex < 0 || req.ReaderIndex >= len(readers) {
+		c.sendError(id, "reader index out of range")
+		return
+	}
+
+	data, err := hex.DecodeString(req.Data)
+	if err != nil || len(data) != 16 {
+		c.sendError(id, "invalid data (must be 32 hex characters for 16 bytes)")
+		return
+	}
+
+	aesKey, err := hex.DecodeString(req.AESKey)
+	if err != nil || len(aesKey) != 16 {
+		c.sendError(id, "invalid aesKey (must be 32 hex characters for 16 bytes)")
+		return
+	}
+
+	authKey, err := parseMifareKey(req.AuthKey)
+	if err != nil {
+		c.sendError(id, err.Error())
+		return
+	}
+	authKeyType := parseMifareKeyType(req.AuthKeyType)
+
+	if err := core.AESEncryptAndWriteBlock(readers[req.ReaderIndex].Name, req.Block, data, aesKey, authKey, authKeyType); err != nil {
+		c.sendError(id, err.Error())
+		return
+	}
+
+	c.sendResponse(id, "aes_write_success", map[string]interface{}{
+		"success": true,
+		"block":   req.Block,
+	})
+}
+
+func (c *WSClient) handleUpdateSectorTrailerKeys(id string, payload json.RawMessage) {
+	var req struct {
+		ReaderIndex int    `json:"readerIndex"`
+		Block       int    `json:"block"`       // Sector trailer block number
+		KeyA        string `json:"keyA"`        // New Key A, 12 hex chars = 6 bytes
+		KeyB        string `json:"keyB"`        // New Key B, 12 hex chars = 6 bytes
+		AuthKey     string `json:"authKey"`     // Key for authentication, 12 hex chars = 6 bytes
+		AuthKeyType string `json:"authKeyType"` // "A" or "B"
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		c.sendError(id, "invalid payload")
+		return
+	}
+
+	readers := core.ListReaders()
+	if req.ReaderIndex < 0 || req.ReaderIndex >= len(readers) {
+		c.sendError(id, "reader index out of range")
+		return
+	}
+
+	keyA, err := hex.DecodeString(req.KeyA)
+	if err != nil || len(keyA) != 6 {
+		c.sendError(id, "invalid keyA (must be 12 hex characters for 6 bytes)")
+		return
+	}
+
+	keyB, err := hex.DecodeString(req.KeyB)
+	if err != nil || len(keyB) != 6 {
+		c.sendError(id, "invalid keyB (must be 12 hex characters for 6 bytes)")
+		return
+	}
+
+	authKey, err := parseMifareKey(req.AuthKey)
+	if err != nil {
+		c.sendError(id, err.Error())
+		return
+	}
+	authKeyType := parseMifareKeyType(req.AuthKeyType)
+
+	if err := core.WriteSectorTrailer(readers[req.ReaderIndex].Name, req.Block, keyA, keyB, authKey, authKeyType); err != nil {
+		c.sendError(id, err.Error())
+		return
+	}
+
+	c.sendResponse(id, "sector_trailer_updated", map[string]interface{}{
+		"success": true,
+		"block":   req.Block,
 	})
 }

@@ -907,19 +907,35 @@ func parseMifareKeyType(kt string) byte {
 // handleMifareBlock handles read/write operations on MIFARE Classic blocks
 // GET /v1/readers/{n}/mifare/{block} - Read block
 // POST /v1/readers/{n}/mifare/{block} - Write block
+// POST /v1/readers/{n}/mifare/derive-key - Derive key from UID via AES
+// POST /v1/readers/{n}/mifare/aes-write/{block} - AES encrypt and write block
+// POST /v1/readers/{n}/mifare/update-trailer/{block} - Update sector trailer keys
 func handleMifareBlock(w http.ResponseWriter, r *http.Request, readerName string, parts []string) {
-	// Expect path: /v1/readers/{n}/mifare/{block}
+	// Expect path: /v1/readers/{n}/mifare/{block or operation}
 	if len(parts) < 5 {
 		respondJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "missing block number (use /mifare/{block})",
+			"error": "missing block number or operation (use /mifare/{block}, /mifare/derive-key, /mifare/aes-write/{block}, or /mifare/update-trailer/{block})",
 		})
+		return
+	}
+
+	// Check for special operations first
+	switch parts[4] {
+	case "derive-key":
+		handleMifareDeriveKey(w, r, readerName)
+		return
+	case "aes-write":
+		handleMifareAESWrite(w, r, readerName, parts)
+		return
+	case "update-trailer":
+		handleMifareUpdateTrailer(w, r, readerName, parts)
 		return
 	}
 
 	blockNum, err := strconv.Atoi(parts[4])
 	if err != nil {
 		respondJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid block number",
+			"error": "invalid block number or unknown operation",
 		})
 		return
 	}
@@ -1013,12 +1029,19 @@ func handleMifareBlock(w http.ResponseWriter, r *http.Request, readerName string
 // handleUltralightPage handles read/write operations on MIFARE Ultralight pages
 // GET /v1/readers/{n}/ultralight/{page} - Read page
 // POST /v1/readers/{n}/ultralight/{page} - Write page
+// POST /v1/readers/{n}/ultralight/batch - Write multiple pages
 func handleUltralightPage(w http.ResponseWriter, r *http.Request, readerName string, parts []string) {
-	// Expect path: /v1/readers/{n}/ultralight/{page}
+	// Expect path: /v1/readers/{n}/ultralight/{page} or /v1/readers/{n}/ultralight/batch
 	if len(parts) < 5 {
 		respondJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "missing page number (use /ultralight/{page})",
+			"error": "missing page number (use /ultralight/{page} or /ultralight/batch)",
 		})
+		return
+	}
+
+	// Handle batch write
+	if parts[4] == "batch" {
+		handleUltralightBatch(w, r, readerName)
 		return
 	}
 
@@ -1108,5 +1131,284 @@ func parseUltralightPassword(pwdHex string) ([]byte, error) {
 		return nil, fmt.Errorf("password must be 8 hex characters (4 bytes)")
 	}
 	return pwd, nil
+}
+
+// handleUltralightBatch handles batch write operations on MIFARE Ultralight pages
+// POST /v1/readers/{n}/ultralight/batch - Write multiple pages in a single card session
+func handleUltralightBatch(w http.ResponseWriter, r *http.Request, readerName string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Pages []struct {
+			Page int    `json:"page"`
+			Data string `json:"data"` // Hex string, 8 chars = 4 bytes
+		} `json:"pages"`
+		Password string `json:"password"` // Optional, hex string, 8 chars = 4 bytes
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if len(req.Pages) == 0 {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "no pages provided"})
+		return
+	}
+
+	// Convert to core types
+	pages := make([]core.UltralightPageWrite, len(req.Pages))
+	for i, p := range req.Pages {
+		data, err := hex.DecodeString(p.Data)
+		if err != nil || len(data) != 4 {
+			respondJSON(w, http.StatusBadRequest, map[string]string{
+				"error": fmt.Sprintf("page %d: invalid data (must be 8 hex characters for 4 bytes)", p.Page),
+			})
+			return
+		}
+		pages[i] = core.UltralightPageWrite{
+			Page: p.Page,
+			Data: data,
+		}
+	}
+
+	password, err := parseUltralightPassword(req.Password)
+	if err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	results, err := core.WriteUltralightPages(readerName, pages, password)
+	if err != nil {
+		logging.Debug(logging.CatHTTP, "Ultralight batch write failed", map[string]any{
+			"reader": readerName,
+			"error":  err.Error(),
+		})
+		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Count successes
+	successCount := 0
+	for _, r := range results {
+		if r.Success {
+			successCount++
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"results": results,
+		"written": successCount,
+		"total":   len(results),
+	})
+}
+
+// handleMifareDeriveKey derives a 6-byte MIFARE key from the card's UID using AES-128-ECB
+// POST /v1/readers/{n}/mifare/derive-key
+func handleMifareDeriveKey(w http.ResponseWriter, r *http.Request, readerName string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		AESKey string `json:"aesKey"` // Hex string, 32 chars = 16 bytes
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid request body",
+		})
+		return
+	}
+
+	aesKey, err := hex.DecodeString(req.AESKey)
+	if err != nil || len(aesKey) != 16 {
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid aesKey (must be 32 hex characters for 16 bytes)",
+		})
+		return
+	}
+
+	key, err := core.DeriveUIDKeyAES(readerName, aesKey)
+	if err != nil {
+		logging.Debug(logging.CatHTTP, "MIFARE derive key failed", map[string]any{
+			"reader": readerName,
+			"error":  err.Error(),
+		})
+		respondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"key": hex.EncodeToString(key),
+	})
+}
+
+// handleMifareAESWrite encrypts data with AES and writes to a MIFARE Classic block
+// POST /v1/readers/{n}/mifare/aes-write/{block}
+func handleMifareAESWrite(w http.ResponseWriter, r *http.Request, readerName string, parts []string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Expect path: /v1/readers/{n}/mifare/aes-write/{block}
+	if len(parts) < 6 {
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "missing block number (use /mifare/aes-write/{block})",
+		})
+		return
+	}
+
+	blockNum, err := strconv.Atoi(parts[5])
+	if err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid block number",
+		})
+		return
+	}
+
+	var req struct {
+		Data        string `json:"data"`        // Hex string, 32 chars = 16 bytes
+		AESKey      string `json:"aesKey"`      // Hex string, 32 chars = 16 bytes
+		AuthKey     string `json:"authKey"`     // Hex string, 12 chars = 6 bytes
+		AuthKeyType string `json:"authKeyType"` // "A" or "B"
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid request body",
+		})
+		return
+	}
+
+	data, err := hex.DecodeString(req.Data)
+	if err != nil || len(data) != 16 {
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid data (must be 32 hex characters for 16 bytes)",
+		})
+		return
+	}
+
+	aesKey, err := hex.DecodeString(req.AESKey)
+	if err != nil || len(aesKey) != 16 {
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid aesKey (must be 32 hex characters for 16 bytes)",
+		})
+		return
+	}
+
+	authKey, err := parseMifareKey(req.AuthKey)
+	if err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+	authKeyType := parseMifareKeyType(req.AuthKeyType)
+
+	if err := core.AESEncryptAndWriteBlock(readerName, blockNum, data, aesKey, authKey, authKeyType); err != nil {
+		logging.Debug(logging.CatHTTP, "MIFARE AES write failed", map[string]any{
+			"reader": readerName,
+			"block":  blockNum,
+			"error":  err.Error(),
+		})
+		respondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"block":   blockNum,
+	})
+}
+
+// handleMifareUpdateTrailer updates a MIFARE Classic sector trailer with new keys
+// POST /v1/readers/{n}/mifare/update-trailer/{block}
+func handleMifareUpdateTrailer(w http.ResponseWriter, r *http.Request, readerName string, parts []string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Expect path: /v1/readers/{n}/mifare/update-trailer/{block}
+	if len(parts) < 6 {
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "missing block number (use /mifare/update-trailer/{block})",
+		})
+		return
+	}
+
+	blockNum, err := strconv.Atoi(parts[5])
+	if err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid block number",
+		})
+		return
+	}
+
+	var req struct {
+		KeyA        string `json:"keyA"`        // New Key A, 12 hex chars = 6 bytes
+		KeyB        string `json:"keyB"`        // New Key B, 12 hex chars = 6 bytes
+		AuthKey     string `json:"authKey"`     // Key for authentication, 12 hex chars = 6 bytes
+		AuthKeyType string `json:"authKeyType"` // "A" or "B"
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid request body",
+		})
+		return
+	}
+
+	keyA, err := hex.DecodeString(req.KeyA)
+	if err != nil || len(keyA) != 6 {
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid keyA (must be 12 hex characters for 6 bytes)",
+		})
+		return
+	}
+
+	keyB, err := hex.DecodeString(req.KeyB)
+	if err != nil || len(keyB) != 6 {
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid keyB (must be 12 hex characters for 6 bytes)",
+		})
+		return
+	}
+
+	authKey, err := parseMifareKey(req.AuthKey)
+	if err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+	authKeyType := parseMifareKeyType(req.AuthKeyType)
+
+	if err := core.WriteSectorTrailer(readerName, blockNum, keyA, keyB, authKey, authKeyType); err != nil {
+		logging.Debug(logging.CatHTTP, "MIFARE update trailer failed", map[string]any{
+			"reader": readerName,
+			"block":  blockNum,
+			"error":  err.Error(),
+		})
+		respondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"block":   blockNum,
+	})
 }
 
