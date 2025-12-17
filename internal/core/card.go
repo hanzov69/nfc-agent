@@ -2391,6 +2391,104 @@ func WriteUltralightPages(readerName string, pages []UltralightPageWrite, passwo
 	return results, nil
 }
 
+// MifareBlockWrite represents a single block write operation.
+type MifareBlockWrite struct {
+	Block int    `json:"block"`
+	Data  []byte `json:"data"` // Must be 16 bytes
+}
+
+// MifareWriteResult represents the result of a single block write.
+type MifareWriteResult struct {
+	Block   int    `json:"block"`
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+// WriteMifareBlocks writes multiple blocks to a MIFARE Classic card
+// in a single card session. This is more efficient and reliable than multiple
+// individual WriteMifareBlock calls. Re-authenticates when crossing sectors.
+func WriteMifareBlocks(readerName string, blocks []MifareBlockWrite, key []byte, keyType byte) ([]MifareWriteResult, error) {
+	if len(blocks) == 0 {
+		return nil, fmt.Errorf("no blocks to write")
+	}
+
+	// Validate all blocks before connecting
+	for _, b := range blocks {
+		if b.Block < 0 || b.Block > 255 {
+			return nil, fmt.Errorf("invalid block number: %d (must be 0-255)", b.Block)
+		}
+		if isSectorTrailer(b.Block) {
+			return nil, fmt.Errorf("cannot write to sector trailer block %d", b.Block)
+		}
+		if len(b.Data) != 16 {
+			return nil, fmt.Errorf("block %d: data must be exactly 16 bytes, got %d", b.Block, len(b.Data))
+		}
+	}
+
+	ctx, err := scard.EstablishContext()
+	if err != nil {
+		return nil, fmt.Errorf("failed to establish context: %w", err)
+	}
+	defer ctx.Release()
+
+	card, err := ctx.Connect(readerName, scard.ShareShared, scard.ProtocolAny)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to reader: %w", err)
+	}
+	defer card.Disconnect(scard.LeaveCard)
+
+	// Convert key type character to APDU byte
+	var keyTypeByte byte = 0x60 // Default Key A
+	if keyType == 'B' || keyType == 'b' || keyType == 0x61 {
+		keyTypeByte = 0x61
+	}
+
+	results := make([]MifareWriteResult, len(blocks))
+	lastAuthSector := -1
+
+	for i, b := range blocks {
+		results[i].Block = b.Block
+
+		// Calculate sector for this block
+		sector := b.Block / 4
+		if b.Block >= 128 {
+			sector = 32 + (b.Block-128)/16
+		}
+
+		// Re-authenticate if sector changed
+		if sector != lastAuthSector {
+			if err := authenticateMifareBlock(card, b.Block, key, keyTypeByte); err != nil {
+				results[i].Error = err.Error()
+				continue
+			}
+			lastAuthSector = sector
+		}
+
+		// Write block: FF D6 00 [block] 10 [16 bytes]
+		writeCmd := []byte{0xFF, 0xD6, 0x00, byte(b.Block), 0x10}
+		writeCmd = append(writeCmd, b.Data...)
+		rsp, err := card.Transmit(writeCmd)
+		if err != nil {
+			results[i].Error = fmt.Sprintf("transmit error: %v", err)
+			lastAuthSector = -1 // Force re-auth on next block
+			continue
+		}
+		if len(rsp) < 2 || rsp[len(rsp)-2] != 0x90 {
+			results[i].Error = fmt.Sprintf("write failed: status %02X %02X", rsp[len(rsp)-2], rsp[len(rsp)-1])
+			lastAuthSector = -1 // Force re-auth on next block
+			continue
+		}
+
+		results[i].Success = true
+		logging.Info(logging.CatCard, "MIFARE block written (batch)", map[string]any{
+			"block": b.Block,
+			"data":  hex.EncodeToString(b.Data),
+		})
+	}
+
+	return results, nil
+}
+
 // authenticateUltralight performs PWD_AUTH on Ultralight EV1 cards.
 // password must be exactly 4 bytes.
 func authenticateUltralight(card *scard.Card, password []byte) error {

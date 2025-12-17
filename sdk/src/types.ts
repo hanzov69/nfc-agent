@@ -129,6 +129,7 @@ export type WSMessageType =
   | 'health'
   | 'read_mifare_block'
   | 'write_mifare_block'
+  | 'write_mifare_blocks'
   | 'read_ultralight_page'
   | 'write_ultralight_page'
   | 'write_ultralight_pages'
@@ -343,6 +344,62 @@ export interface WriteMifareBlockPayload {
   readerIndex: number;
   block: number;
   data: string;
+  key?: string;
+  keyType?: MifareKeyType;
+}
+
+/**
+ * A single block write operation for batch writes
+ */
+export interface MifareBlockWriteOp {
+  /** Block number (0-255, excluding sector trailers) */
+  block: number;
+  /** Block data as hex string (32 characters = 16 bytes) */
+  data: string;
+}
+
+/**
+ * Options for batch writing multiple MIFARE Classic blocks
+ */
+export interface MifareBatchWriteOptions {
+  /** Array of block write operations */
+  blocks: MifareBlockWriteOp[];
+  /** Authentication key as hex string (12 characters = 6 bytes). If not provided, default keys are tried. */
+  key?: string;
+  /** Key type: 'A' or 'B' (default: 'A') */
+  keyType?: MifareKeyType;
+}
+
+/**
+ * Result of a single block write in a batch operation
+ */
+export interface MifareBlockWriteResult {
+  /** Block number */
+  block: number;
+  /** Whether the write succeeded */
+  success: boolean;
+  /** Error message if write failed */
+  error?: string;
+}
+
+/**
+ * Response from batch writing MIFARE Classic blocks
+ */
+export interface MifareBatchWriteResult {
+  /** Results for each block write */
+  results: MifareBlockWriteResult[];
+  /** Number of blocks successfully written */
+  written: number;
+  /** Total number of blocks attempted */
+  total: number;
+}
+
+/**
+ * Payload for write_mifare_blocks WebSocket request
+ */
+export interface WriteMifareBlocksPayload {
+  readerIndex: number;
+  blocks: MifareBlockWriteOp[];
   key?: string;
   keyType?: MifareKeyType;
 }

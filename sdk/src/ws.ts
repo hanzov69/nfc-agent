@@ -13,6 +13,8 @@ import type {
   MifareBlockData,
   MifareReadOptions,
   MifareWriteOptions,
+  MifareBatchWriteOptions,
+  MifareBatchWriteResult,
   UltralightPageData,
   UltralightReadOptions,
   UltralightWriteOptions,
@@ -503,6 +505,33 @@ export class NFCAgentWebSocket {
         readerIndex,
         block,
         data: options.data,
+        key: options.key,
+        keyType: options.keyType,
+      });
+    } catch (error) {
+      if (error instanceof NFCAgentError) {
+        throw new CardError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Write multiple blocks to a MIFARE Classic card in a single card session.
+   * This is more efficient and reliable than multiple individual writeMifareBlock calls.
+   * Re-authenticates automatically when crossing sector boundaries.
+   * @param readerIndex - Index of the reader (0-based)
+   * @param options - Options including array of block writes and optional authentication key
+   * @returns Results for each block write operation
+   */
+  async writeMifareBlocks(
+    readerIndex: number,
+    options: MifareBatchWriteOptions
+  ): Promise<MifareBatchWriteResult> {
+    try {
+      return await this.request<MifareBatchWriteResult>('write_mifare_blocks', {
+        readerIndex,
+        blocks: options.blocks,
         key: options.key,
         keyType: options.keyType,
       });

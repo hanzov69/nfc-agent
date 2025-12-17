@@ -38,6 +38,15 @@ export type {
   HealthInfo,
   CardDetectedEvent,
   CardRemovedEvent,
+  // MIFARE Classic types
+  MifareBlockData,
+  MifareReadOptions,
+  MifareWriteOptions,
+  MifareBatchWriteOptions,
+  MifareBatchWriteResult,
+  MifareBlockWriteOp,
+  MifareBlockWriteResult,
+  MifareKeyType,
   // Ultralight types
   UltralightPageData,
   UltralightReadOptions,

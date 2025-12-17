@@ -907,6 +907,7 @@ func parseMifareKeyType(kt string) byte {
 // handleMifareBlock handles read/write operations on MIFARE Classic blocks
 // GET /v1/readers/{n}/mifare/{block} - Read block
 // POST /v1/readers/{n}/mifare/{block} - Write block
+// POST /v1/readers/{n}/mifare/batch - Write multiple blocks in a single session
 // POST /v1/readers/{n}/mifare/derive-key - Derive key from UID via AES
 // POST /v1/readers/{n}/mifare/aes-write/{block} - AES encrypt and write block
 // POST /v1/readers/{n}/mifare/update-trailer/{block} - Update sector trailer keys
@@ -914,13 +915,16 @@ func handleMifareBlock(w http.ResponseWriter, r *http.Request, readerName string
 	// Expect path: /v1/readers/{n}/mifare/{block or operation}
 	if len(parts) < 5 {
 		respondJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "missing block number or operation (use /mifare/{block}, /mifare/derive-key, /mifare/aes-write/{block}, or /mifare/update-trailer/{block})",
+			"error": "missing block number or operation (use /mifare/{block}, /mifare/batch, /mifare/derive-key, /mifare/aes-write/{block}, or /mifare/update-trailer/{block})",
 		})
 		return
 	}
 
 	// Check for special operations first
 	switch parts[4] {
+	case "batch":
+		handleMifareBatch(w, r, readerName)
+		return
 	case "derive-key":
 		handleMifareDeriveKey(w, r, readerName)
 		return
@@ -1195,6 +1199,81 @@ func handleUltralightBatch(w http.ResponseWriter, r *http.Request, readerName st
 	successCount := 0
 	for _, r := range results {
 		if r.Success {
+			successCount++
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"results": results,
+		"written": successCount,
+		"total":   len(results),
+	})
+}
+
+// handleMifareBatch handles batch write operations on MIFARE Classic blocks
+// POST /v1/readers/{n}/mifare/batch - Write multiple blocks in a single card session
+func handleMifareBatch(w http.ResponseWriter, r *http.Request, readerName string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Blocks []struct {
+			Block int    `json:"block"`
+			Data  string `json:"data"` // Hex string, 32 chars = 16 bytes
+		} `json:"blocks"`
+		Key     string `json:"key"`     // Hex string, 12 chars = 6 bytes
+		KeyType string `json:"keyType"` // "A" or "B"
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if len(req.Blocks) == 0 {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "no blocks provided"})
+		return
+	}
+
+	// Convert to core types
+	blocks := make([]core.MifareBlockWrite, len(req.Blocks))
+	for i, b := range req.Blocks {
+		data, err := hex.DecodeString(b.Data)
+		if err != nil || len(data) != 16 {
+			respondJSON(w, http.StatusBadRequest, map[string]string{
+				"error": fmt.Sprintf("block %d: invalid data (must be 32 hex characters for 16 bytes)", b.Block),
+			})
+			return
+		}
+		blocks[i] = core.MifareBlockWrite{
+			Block: b.Block,
+			Data:  data,
+		}
+	}
+
+	key, err := parseMifareKey(req.Key)
+	if err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	keyType := parseMifareKeyType(req.KeyType)
+
+	results, err := core.WriteMifareBlocks(readerName, blocks, key, keyType)
+	if err != nil {
+		logging.Debug(logging.CatHTTP, "MIFARE batch write failed", map[string]any{
+			"reader": readerName,
+			"error":  err.Error(),
+		})
+		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Count successes
+	successCount := 0
+	for _, result := range results {
+		if result.Success {
 			successCount++
 		}
 	}

@@ -209,6 +209,23 @@ await ws.writeMifareBlock(0, 4, {
   data: '01120100000000000000000000000000',
   key: 'FFFFFFFFFFFF'
 });
+
+// Batch write multiple blocks (more efficient for multiple writes)
+const result = await ws.writeMifareBlocks(0, {
+  blocks: [
+    { block: 4, data: '00112233445566778899AABBCCDDEEFF' },
+    { block: 5, data: 'FFEEDDCCBBAA99887766554433221100' },
+    { block: 8, data: 'DEADBEEFDEADBEEFDEADBEEFDEADBEEF' }  // Different sector - re-auths automatically
+  ],
+  key: 'FFFFFFFFFFFF',
+  keyType: 'A'
+});
+console.log(`Wrote ${result.written}/${result.total} blocks`);
+for (const r of result.results) {
+  if (!r.success) {
+    console.error(`Block ${r.block} failed: ${r.error}`);
+  }
+}
 ```
 
 **Notes:**
@@ -382,8 +399,10 @@ poller.start();
 | `health()` | Health check |
 | `readMifareBlock(reader, block, options?)` | Read raw MIFARE Classic block |
 | `writeMifareBlock(reader, block, options)` | Write raw MIFARE Classic block |
+| `writeMifareBlocks(reader, options)` | Write multiple MIFARE Classic blocks |
 | `readUltralightPage(reader, page, options?)` | Read raw MIFARE Ultralight page |
 | `writeUltralightPage(reader, page, options)` | Write raw MIFARE Ultralight page |
+| `writeUltralightPages(reader, options)` | Write multiple MIFARE Ultralight pages |
 | `deriveUIDKeyAES(reader, options)` | Derive 6-byte key from UID via AES |
 | `aesEncryptAndWriteBlock(reader, block, options)` | AES encrypt + write block |
 | `updateSectorTrailerKeys(reader, block, options)` | Update sector trailer keys |
@@ -410,8 +429,10 @@ poller.start();
 | `getVersion()` | Get agent version and update info |
 | `readMifareBlock(reader, block, options?)` | Read raw MIFARE Classic block |
 | `writeMifareBlock(reader, block, options)` | Write raw MIFARE Classic block |
+| `writeMifareBlocks(reader, options)` | Write multiple MIFARE Classic blocks |
 | `readUltralightPage(reader, page, options?)` | Read raw MIFARE Ultralight page |
 | `writeUltralightPage(reader, page, options)` | Write raw MIFARE Ultralight page |
+| `writeUltralightPages(reader, options)` | Write multiple MIFARE Ultralight pages |
 | `deriveUIDKeyAES(reader, options)` | Derive 6-byte key from UID via AES |
 | `aesEncryptAndWriteBlock(reader, block, options)` | AES encrypt + write block |
 | `updateSectorTrailerKeys(reader, block, options)` | Update sector trailer keys |
@@ -479,6 +500,29 @@ interface MifareWriteOptions {
   data: string;       // 32 hex chars = 16 bytes
   key?: string;       // 12 hex chars = 6 bytes
   keyType?: MifareKeyType;
+}
+
+interface MifareBlockWriteOp {
+  block: number;
+  data: string;       // 32 hex chars = 16 bytes
+}
+
+interface MifareBatchWriteOptions {
+  blocks: MifareBlockWriteOp[];
+  key?: string;       // 12 hex chars = 6 bytes
+  keyType?: MifareKeyType;
+}
+
+interface MifareBlockWriteResult {
+  block: number;
+  success: boolean;
+  error?: string;
+}
+
+interface MifareBatchWriteResult {
+  results: MifareBlockWriteResult[];
+  written: number;
+  total: number;
 }
 
 // MIFARE Ultralight types

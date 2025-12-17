@@ -177,6 +177,7 @@ Configure via environment variables:
 | `POST` | `/v1/readers/{n}/records` | Write multiple NDEF records |
 | `GET` | `/v1/readers/{n}/mifare/{block}` | Read MIFARE Classic block |
 | `POST` | `/v1/readers/{n}/mifare/{block}` | Write MIFARE Classic block |
+| `POST` | `/v1/readers/{n}/mifare/batch` | Write multiple MIFARE Classic blocks |
 | `GET` | `/v1/readers/{n}/ultralight/{page}` | Read MIFARE Ultralight page |
 | `POST` | `/v1/readers/{n}/ultralight/{page}` | Write MIFARE Ultralight page |
 | `POST` | `/v1/readers/{n}/mifare/derive-key` | Derive 6-byte key from UID via AES |
@@ -213,8 +214,8 @@ Connect to `ws://127.0.0.1:32145/v1/ws` for real-time card events.
 - `write_card` - Write data to card
 - `subscribe` / `unsubscribe` - Real-time card detection
 - `erase_card`, `lock_card`, `set_password`, `remove_password`
-- `read_mifare_block`, `write_mifare_block` - Raw MIFARE Classic block access
-- `read_ultralight_page`, `write_ultralight_page` - Raw MIFARE Ultralight page access
+- `read_mifare_block`, `write_mifare_block`, `write_mifare_blocks` - Raw MIFARE Classic block access
+- `read_ultralight_page`, `write_ultralight_page`, `write_ultralight_pages` - Raw MIFARE Ultralight page access
 - `derive_uid_key_aes` - Derive 6-byte key from UID via AES
 - `aes_encrypt_and_write_block` - AES encrypt + write MIFARE block
 - `update_sector_trailer_keys` - Update sector trailer keys
@@ -314,6 +315,49 @@ If no key is provided, the agent tries these default keys in order:
 - **Sector trailers** (blocks 3, 7, 11, 15, etc.) cannot be read or written - they contain authentication keys
 - Block numbers: 0-63 for MIFARE Classic 1K, 0-255 for MIFARE Classic 4K
 - Each block is 16 bytes (32 hex characters)
+
+### Batch Write Multiple Blocks
+
+Write multiple blocks efficiently in a single card session. Automatically re-authenticates when crossing sector boundaries.
+
+**HTTP:**
+```bash
+curl -X POST http://127.0.0.1:32145/v1/readers/0/mifare/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "blocks": [
+      {"block": 4, "data": "00112233445566778899AABBCCDDEEFF"},
+      {"block": 5, "data": "FFEEDDCCBBAA99887766554433221100"}
+    ],
+    "key": "FFFFFFFFFFFF",
+    "keyType": "A"
+  }'
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {"block": 4, "success": true, "error": ""},
+    {"block": 5, "success": true, "error": ""}
+  ],
+  "written": 2,
+  "total": 2
+}
+```
+
+**JavaScript SDK:**
+```typescript
+const result = await client.writeMifareBlocks(0, {
+  blocks: [
+    { block: 4, data: '00112233445566778899AABBCCDDEEFF' },
+    { block: 5, data: 'FFEEDDCCBBAA99887766554433221100' }
+  ],
+  key: 'FFFFFFFFFFFF',
+  keyType: 'A'
+});
+console.log(`Wrote ${result.written}/${result.total} blocks`);
+```
 
 ## MIFARE Ultralight Raw Page Access
 

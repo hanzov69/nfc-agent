@@ -253,6 +253,8 @@ func (c *WSClient) handleMessage(msg WSMessage) {
 		c.handleReadMifareBlock(msg.ID, msg.Payload)
 	case "write_mifare_block":
 		c.handleWriteMifareBlock(msg.ID, msg.Payload)
+	case "write_mifare_blocks":
+		c.handleWriteMifareBlocks(msg.ID, msg.Payload)
 	case "read_ultralight_page":
 		c.handleReadUltralightPage(msg.ID, msg.Payload)
 	case "write_ultralight_page":
@@ -787,6 +789,74 @@ func (c *WSClient) handleWriteMifareBlock(id string, payload json.RawMessage) {
 	c.sendResponse(id, "mifare_write_success", map[string]interface{}{
 		"success": true,
 		"block":   req.Block,
+	})
+}
+
+func (c *WSClient) handleWriteMifareBlocks(id string, payload json.RawMessage) {
+	var req struct {
+		ReaderIndex int `json:"readerIndex"`
+		Blocks      []struct {
+			Block int    `json:"block"`
+			Data  string `json:"data"` // Hex string, 32 chars = 16 bytes
+		} `json:"blocks"`
+		Key     string `json:"key"`     // Hex string, 12 chars = 6 bytes
+		KeyType string `json:"keyType"` // "A" or "B"
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		c.sendError(id, "invalid payload")
+		return
+	}
+
+	readers := core.ListReaders()
+	if req.ReaderIndex < 0 || req.ReaderIndex >= len(readers) {
+		c.sendError(id, "reader index out of range")
+		return
+	}
+
+	if len(req.Blocks) == 0 {
+		c.sendError(id, "no blocks provided")
+		return
+	}
+
+	// Convert to core types
+	blocks := make([]core.MifareBlockWrite, len(req.Blocks))
+	for i, b := range req.Blocks {
+		data, err := hex.DecodeString(b.Data)
+		if err != nil || len(data) != 16 {
+			c.sendError(id, fmt.Sprintf("block %d: invalid data (must be 32 hex characters for 16 bytes)", b.Block))
+			return
+		}
+		blocks[i] = core.MifareBlockWrite{
+			Block: b.Block,
+			Data:  data,
+		}
+	}
+
+	key, err := parseMifareKey(req.Key)
+	if err != nil {
+		c.sendError(id, err.Error())
+		return
+	}
+	keyType := parseMifareKeyType(req.KeyType)
+
+	results, err := core.WriteMifareBlocks(readers[req.ReaderIndex].Name, blocks, key, keyType)
+	if err != nil {
+		c.sendError(id, err.Error())
+		return
+	}
+
+	// Count successes
+	successCount := 0
+	for _, result := range results {
+		if result.Success {
+			successCount++
+		}
+	}
+
+	c.sendResponse(id, "mifare_write_blocks_success", map[string]interface{}{
+		"results": results,
+		"written": successCount,
+		"total":   len(results),
 	})
 }
 
